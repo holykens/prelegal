@@ -124,6 +124,25 @@ def test_chat_extracts_fields(mock_completion):
 
 
 @patch("main.completion")
+def test_chat_safety_net4_extracts_ack_from_reply(mock_completion):
+    """S4: if model acknowledges a field in reply but omits it from slots, extract from reply."""
+    mock_completion.return_value = _mock_llm(
+        "Payment Process has been set to: Ken Masters will pay $200k monthly.",
+        slots=[],  # model forgot to include the field
+    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "Ken Masters will pay $200k monthly"}],
+        "document_name": "Cloud Service Agreement",
+        "fields": {},
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert "Payment Process" in data["fields"], (
+        f"S4 should have extracted Payment Process from reply, got fields: {data['fields']}"
+    )
+
+
+@patch("main.completion")
 def test_chat_appends_followup_when_reply_has_no_question(mock_completion):
     """Backend must append a follow-up question even when the model forgets to."""
     mock_completion.return_value = _mock_llm(

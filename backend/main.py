@@ -293,13 +293,10 @@ async def chat(req: ChatRequest):
 
     # Safety net 3: if the model mentions an ISO date (YYYY-MM-DD) in its reply, update any
     # corresponding field that currently holds a relative/non-ISO date value (e.g. "tomorrow").
-    # This fixes the common pattern: model says "I've updated Order Date to 2026-05-15" but
-    # forgets to include the update in slots.
     if req.document_name and template_fields:
         reply_lower_for_dates = reply.lower()
         for field in template_fields:
             existing_val = req.fields.get(field, "").strip()
-            # Only attempt correction when the field has a value that is NOT already ISO
             if existing_val and not _ISO_DATE_RE.match(existing_val) and field not in new_fields:
                 field_lower = field.lower()
                 if field_lower in reply_lower_for_dates:
@@ -308,7 +305,37 @@ async def chat(req: ChatRequest):
                     date_match = _ISO_DATE_RE.search(nearby)
                     if date_match:
                         new_fields[field] = date_match.group()
-                        print(f"[chat] date correction: {field} → {date_match.group()}")
+                        print(f"[chat] S3 date: {field} → {date_match.group()}")
+
+    # Safety net 4: if the model acknowledges setting a field value in its reply text but
+    # forgot to put it in slots, extract the value from the acknowledgment.
+    # Handles: "Payment Process has been set to: ...", "Got it, I've recorded X as ..."
+    _S4_ACK_RE = re.compile(
+        r'(?:has been set|is set|have been set|set|recorded|captured|noted|added|updated|is now)\s*'
+        r'(?:to|as)[:\s]+(.+)',
+        re.I,
+    )
+    if req.document_name and template_fields and reply:
+        reply_lower_s4 = reply.lower()
+        for field in template_fields:
+            if field in new_fields or field in req.fields:
+                continue
+            field_lower = field.lower()
+            idx = reply_lower_s4.find(field_lower)
+            # Only act when the field name appears within the first 80 chars of the reply
+            # (i.e. the model is clearly leading with an acknowledgment of this field)
+            if 0 <= idx <= 80:
+                remainder = reply[idx + len(field):]
+                m = _S4_ACK_RE.search(remainder)
+                if m:
+                    raw = m.group(1).strip()
+                    # Stop at the first sentence boundary to avoid grabbing the follow-up question
+                    sentence_end = re.search(r'[.?!]', raw)
+                    val = (raw[: sentence_end.start()].strip() if sentence_end else raw).rstrip(".,!?")
+                    if 3 <= len(val) <= 500:
+                        new_fields[field] = val
+                        print(f"[chat] S4 ack: {field!r} → {val[:60]!r}")
+                        break  # one field per safety-net pass to avoid false matches
 
     # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
     # A field is "handled" once it has any key in the combined fields dict (even value "None").
