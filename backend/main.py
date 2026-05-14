@@ -4,6 +4,8 @@ import json
 import sqlite3
 from typing import Literal, Optional
 
+_ISO_DATE_RE = re.compile(r'\b(\d{4}-\d{2}-\d{2})\b')
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -218,7 +220,9 @@ Still needed:
 Rules:
 - When the user provides a value for a required field, capture it with the exact field name from the list.
 - If the user says to leave a field blank, empty, skip, or "none", set it to the string "None" so it is marked as handled and we can move on.
-- Once a field is in the "Already handled" list, never ask about it again — it is done.
+- If the user asks to UPDATE, CHANGE, or REFORMAT a field that is already in "Already handled", you MUST include the corrected value in slots — overriding the previous value. Do NOT assume an already-handled field is frozen.
+- When converting a relative date (e.g. "tomorrow", "today") to YYYY-MM-DD, include the converted date in slots with the exact field name.
+- Once a field is in the "Already handled" list, never ask about it again — it is done (unless the user requests a change).
 - Keep document_name null (document is already selected).
 - Focus on one or two still-needed fields per turn — do not overwhelm the user.
 - Your reply must be natural conversational English — never output a field name, JSON key, or code word as your reply.
@@ -230,6 +234,7 @@ Rules:
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
+    template_fields: list[str] = []
     if req.document_name:
         content = load_template(req.document_name)
         if content is None:
@@ -256,11 +261,15 @@ async def chat(req: ChatRequest):
         print(f"[chat] LLM error: {exc!r}")
         return {"reply": "I had trouble processing that. Please try again.", "document_name": None, "fields": {}}
 
-    # Guard against the model echoing a schema key as the reply.
+    # Guard against the model echoing a schema key or a template field name as the reply.
     _bad_reply_tokens = {"slots", "field_updates", "document_name", "reply", "key", "value",
                          "null", "true", "false", "none", "extracted", "values"}
     reply = extraction.reply.strip()
-    if not reply or reply.lower() in _bad_reply_tokens or len(reply) < 8:
+    _field_names_lower = {f.lower() for f in (template_fields or [])}
+    if (not reply
+            or reply.lower() in _bad_reply_tokens
+            or reply.lower() in _field_names_lower
+            or len(reply) < 8):
         print(f"[chat] bad reply detected: {reply!r}")
         reply = ""  # will be rebuilt below
 
@@ -281,6 +290,25 @@ async def chat(req: ChatRequest):
     # e.g. setting "Subscription Period" also sets "Subscription Periods"; "Customer" → "Customer's"
     if req.document_name and template_fields:
         new_fields = _propagate_variants(new_fields, template_fields, req.fields)
+
+    # Safety net 3: if the model mentions an ISO date (YYYY-MM-DD) in its reply, update any
+    # corresponding field that currently holds a relative/non-ISO date value (e.g. "tomorrow").
+    # This fixes the common pattern: model says "I've updated Order Date to 2026-05-15" but
+    # forgets to include the update in slots.
+    if req.document_name and template_fields:
+        reply_lower_for_dates = reply.lower()
+        for field in template_fields:
+            existing_val = req.fields.get(field, "").strip()
+            # Only attempt correction when the field has a value that is NOT already ISO
+            if existing_val and not _ISO_DATE_RE.match(existing_val) and field not in new_fields:
+                field_lower = field.lower()
+                if field_lower in reply_lower_for_dates:
+                    idx = reply_lower_for_dates.find(field_lower)
+                    nearby = reply[max(0, idx - 20): idx + len(field) + 80]
+                    date_match = _ISO_DATE_RE.search(nearby)
+                    if date_match:
+                        new_fields[field] = date_match.group()
+                        print(f"[chat] date correction: {field} → {date_match.group()}")
 
     # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
     # A field is "handled" once it has any key in the combined fields dict (even value "None").
