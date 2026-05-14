@@ -1,13 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import NDAForm from "./components/NDAForm";
 import NDAPreview from "./components/NDAPreview";
 import { defaultFormData } from "./types";
 import type { NDAFormData } from "./types";
 
 export default function Home() {
+  const router = useRouter();
   const [formData, setFormData] = useState<NDAFormData>(defaultFormData);
+
+  useEffect(() => {
+    if (!localStorage.getItem("pl_logged_in")) {
+      router.replace("/login");
+    }
+  }, [router]);
 
   return (
     <>
@@ -23,7 +31,12 @@ export default function Home() {
             <p className="text-xs text-gray-400 mt-0.5">Prelegal · CommonPaper v1.0</p>
           </div>
         </div>
-        <span className="text-xs bg-blue-50 text-blue-700 font-medium px-2 py-1 rounded-full">Prototype</span>
+        <button
+          onClick={() => { localStorage.removeItem("pl_logged_in"); router.push("/login"); }}
+          className="text-xs text-gray-500 hover:text-gray-800 transition-colors"
+        >
+          Sign out
+        </button>
       </header>
 
       <div className="app-layout flex" style={{ height: "calc(100vh - 53px)" }}>
