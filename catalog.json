@@ -1,0 +1,62 @@
+[
+  {
+    "name": "Mutual Non-Disclosure Agreement",
+    "description": "Standard terms for a mutual NDA allowing both parties to share confidential information for a defined purpose, with equal obligations for each party as both discloser and receiver.",
+    "filename": "templates/Mutual-NDA.md"
+  },
+  {
+    "name": "Mutual Non-Disclosure Agreement Cover Page",
+    "description": "Cover page template for the Common Paper Mutual NDA, containing the key variables such as purpose, effective date, MNDA term, term of confidentiality, governing law, and signature blocks.",
+    "filename": "templates/Mutual-NDA-coverpage.md"
+  },
+  {
+    "name": "Cloud Service Agreement",
+    "description": "Comprehensive agreement governing the provision of cloud-based software services, covering access and use rights, restrictions, privacy, payment, term and termination, warranties, liability, indemnification, and confidentiality between a provider and customer.",
+    "filename": "templates/CSA.md"
+  },
+  {
+    "name": "Design Partner Agreement",
+    "description": "Agreement for early-access design partner programs where a partner gains access to a product in exchange for providing feedback, with the provider retaining all intellectual property developed from the program.",
+    "filename": "templates/design-partner-agreement.md"
+  },
+  {
+    "name": "Service Level Agreement",
+    "description": "Standard terms defining target uptime and response time commitments for cloud services, including how availability is calculated, service credits for failures, and the process for requesting remedies.",
+    "filename": "templates/sla.md"
+  },
+  {
+    "name": "Professional Services Agreement",
+    "description": "Agreement governing the provision of professional services including deliverables, intellectual property ownership, payment, confidentiality, indemnification, and insurance requirements between a service provider and customer.",
+    "filename": "templates/psa.md"
+  },
+  {
+    "name": "Data Processing Agreement",
+    "description": "Agreement governing the processing of personal data by a provider on behalf of a customer, covering GDPR and UK GDPR compliance, data subject rights, subprocessors, international data transfers, security incident response, and audit rights.",
+    "filename": "templates/DPA.md"
+  },
+  {
+    "name": "Software License Agreement",
+    "description": "Agreement for licensing on-premise or installable software, covering license grant, restrictions, updates, payment, warranties, liability limitations, indemnification, and confidentiality between a software provider and customer.",
+    "filename": "templates/Software-License-Agreement.md"
+  },
+  {
+    "name": "Partnership Agreement",
+    "description": "Agreement establishing a commercial partnership between two companies, covering mutual obligations, trademark licensing, payment, escalation procedures, confidentiality, indemnification, and liability.",
+    "filename": "templates/Partnership-Agreement.md"
+  },
+  {
+    "name": "Pilot Agreement",
+    "description": "Short-form agreement for a time-limited product pilot or proof-of-concept, giving a customer temporary access to evaluate the product for potential purchase, with minimal warranties and a simple liability cap.",
+    "filename": "templates/Pilot-Agreement.md"
+  },
+  {
+    "name": "Business Associate Agreement",
+    "description": "HIPAA-compliant agreement governing how a business associate (provider) handles Protected Health Information on behalf of a covered entity (company), including safeguards, breach notification, subcontractors, and individual rights obligations.",
+    "filename": "templates/BAA.md"
+  },
+  {
+    "name": "AI Addendum",
+    "description": "Addendum to a base software or cloud service agreement covering AI-specific terms including permitted use of AI services, restrictions on AI-assisted decision-making, model training rights, IP ownership of inputs and outputs, and AI disclaimers.",
+    "filename": "templates/AI-Addendum.md"
+  }
+]
