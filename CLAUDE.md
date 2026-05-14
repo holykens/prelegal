@@ -8,7 +8,7 @@ The available documents are covered in the catalog.json file in the project root
 
 @catalog.json
 
-The current implementation supports all 11 document types via AI chat with full user authentication and document persistence.
+The current implementation supports Mutual NDA drafting via AI chat. Multi-document support, real authentication, and document persistence are not yet implemented.
 
 ## Development process
 
@@ -64,12 +64,20 @@ Backend available at http://localhost:8000
 - Fake login screen — any credentials accepted; session stored in `localStorage`; main page redirects to `/login` when not signed in; sign-out button in header
 - Start/stop scripts for Mac, Linux, and Windows in `scripts/`
 
+### Completed (PL-5) — merged to main
+- AI chat interface replacing the manual form sidebar
+- Tab-based sidebar: **AI Chat** (default) and **Edit Fields** (manual form for review/tweaks)
+- `POST /api/chat` uses LiteLLM → OpenRouter → Cerebras (`openrouter/openai/gpt-oss-120b`) with Pydantic structured outputs to extract NDA field values from conversation
+- Typed `NDAFormFields` Pydantic model validates `current_fields` on every chat request
+- Live document preview updates as AI extracts field values
+- 8 unit tests in `backend/tests/test_chat.py`
+- Mutual NDA only; multi-document support is PL-6
+
 ### Current API Endpoints
 - `GET /api/health` — health check
+- `POST /api/chat` — AI chat turn; accepts `{messages, current_fields}`, returns `{reply, fields}`
 
 ### Not yet implemented
-- Real authentication (PL-7)
-- AI chat interface (PL-5)
 - Multi-document support (PL-6)
-- Document persistence (PL-7)
+- Real authentication and document persistence (PL-7)
 
