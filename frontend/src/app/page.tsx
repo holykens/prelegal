@@ -2,35 +2,22 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import NDAForm from "./components/NDAForm";
-import NDAPreview from "./components/NDAPreview";
 import ChatPanel from "./components/ChatPanel";
-import { defaultFormData } from "./types";
-import type { NDAFormData, ChatMessage, Party } from "./types";
+import DocumentPreview from "./components/DocumentPreview";
+import FieldsForm from "./components/FieldsForm";
+import { defaultDocumentState } from "./types";
+import type { ChatMessage, DocumentState } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-function applyFields(base: NDAFormData, fields: Record<string, unknown>): NDAFormData {
-  const result = { ...base };
-  for (const [key, val] of Object.entries(fields)) {
-    if (val === null || val === undefined) continue;
-    if (key === "party1" || key === "party2") {
-      result[key] = { ...base[key], ...(val as Partial<Party>) };
-    } else {
-      (result as Record<string, unknown>)[key] = val;
-    }
-  }
-  return result;
-}
-
 export default function Home() {
   const router = useRouter();
-  const [formData, setFormData] = useState<NDAFormData>(defaultFormData);
+  const [docState, setDocState] = useState<DocumentState>(defaultDocumentState);
   const [sidebarTab, setSidebarTab] = useState<"chat" | "fields">("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const formDataRef = useRef(formData);
-  useEffect(() => { formDataRef.current = formData; }, [formData]);
+  const docStateRef = useRef(docState);
+  useEffect(() => { docStateRef.current = docState; }, [docState]);
 
   useEffect(() => {
     if (!localStorage.getItem("pl_logged_in")) {
@@ -45,16 +32,39 @@ export default function Home() {
     setIsLoading(true);
 
     try {
+      const { documentName, fields } = docStateRef.current;
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: updated, current_fields: formDataRef.current }),
+        body: JSON.stringify({ messages: updated, document_name: documentName, fields }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
-      if (data.fields && Object.keys(data.fields).length > 0) {
-        setFormData((prev) => applyFields(prev, data.fields));
+
+      const incomingDoc: string | null = data.document_name ?? null;
+      const incomingFields: Record<string, string> = data.fields ?? {};
+
+      if (incomingDoc && incomingDoc !== docStateRef.current.documentName) {
+        // New document selected — fetch its template
+        const tmplRes = await fetch(
+          `${API_BASE}/api/template?document_name=${encodeURIComponent(incomingDoc)}`
+        );
+        if (tmplRes.ok) {
+          const tmpl = await tmplRes.json();
+          setDocState((prev) => ({
+            documentName: incomingDoc,
+            templateContent: tmpl.content,
+            allFields: tmpl.fields,
+            fields: { ...prev.fields, ...incomingFields },
+          }));
+        }
+      } else if (Object.keys(incomingFields).length > 0) {
+        setDocState((prev) => ({
+          ...prev,
+          fields: { ...prev.fields, ...incomingFields },
+        }));
       }
     } catch {
       setMessages((prev) => [
@@ -66,6 +76,8 @@ export default function Home() {
     }
   }
 
+  const docTitle = docState.documentName ?? "Legal Document Assistant";
+
   return (
     <>
       <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between print:hidden">
@@ -76,8 +88,8 @@ export default function Home() {
             </svg>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-gray-900 leading-none">Mutual NDA Creator</h1>
-            <p className="text-xs text-gray-400 mt-0.5">Prelegal · CommonPaper v1.0</p>
+            <h1 className="text-sm font-semibold text-gray-900 leading-none">{docTitle}</h1>
+            <p className="text-xs text-gray-400 mt-0.5">Prelegal</p>
           </div>
         </div>
         <button
@@ -90,7 +102,6 @@ export default function Home() {
 
       <div className="app-layout flex" style={{ height: "calc(100vh - 53px)" }}>
         <aside className="w-80 shrink-0 flex flex-col border-r border-gray-200 bg-white print:hidden">
-          {/* Tab bar */}
           <div className="flex shrink-0 border-b border-gray-100">
             <button
               onClick={() => setSidebarTab("chat")}
@@ -114,18 +125,20 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Tab content */}
           {sidebarTab === "chat" ? (
             <ChatPanel messages={messages} isLoading={isLoading} onSend={handleSend} />
           ) : (
             <div className="flex-1 overflow-y-auto px-5 py-5">
-              <NDAForm data={formData} onChange={setFormData} />
+              <FieldsForm
+                docState={docState}
+                onChange={(fields) => setDocState((prev) => ({ ...prev, fields }))}
+              />
             </div>
           )}
         </aside>
 
         <main className="flex-1 overflow-y-auto px-6 py-5">
-          <NDAPreview data={formData} />
+          <DocumentPreview docState={docState} />
         </main>
       </div>
     </>

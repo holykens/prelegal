@@ -1,10 +1,11 @@
 import os
+import re
 import json
 import sqlite3
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from litellm import completion
@@ -24,6 +25,46 @@ app.add_middleware(
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "prelegal.db"))
 MODEL = "openrouter/openai/gpt-oss-120b"
 EXTRA_BODY = {"provider": {"order": ["cerebras"]}}
+
+_BASE_DIR = os.path.dirname(__file__)
+_catalog_path = os.getenv("CATALOG_PATH", os.path.join(_BASE_DIR, "catalog.json"))
+TEMPLATES_DIR = os.getenv("TEMPLATES_DIR", os.path.join(_BASE_DIR, "templates"))
+_catalog: list[dict] = []
+_catalog_by_name: dict[str, dict] = {}
+
+if os.path.exists(_catalog_path):
+    with open(_catalog_path, encoding="utf-8") as _f:
+        _catalog = json.load(_f)
+    _catalog_by_name = {doc["name"]: doc for doc in _catalog}
+
+# Matches all three span types used as fillable placeholders across templates
+_FIELD_SPAN_RE = re.compile(
+    r'<span class="(?:coverpage_link|keyterms_link|orderform_link)">([^<]+)</span>'
+)
+
+
+def load_template(doc_name: str) -> str | None:
+    doc = _catalog_by_name.get(doc_name)
+    if not doc:
+        return None
+    # doc["filename"] is like "templates/Mutual-NDA.md"; strip the leading "templates/" prefix
+    # since we resolve relative to TEMPLATES_DIR
+    filename = os.path.basename(doc["filename"])
+    path = os.path.join(TEMPLATES_DIR, filename)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def extract_fields(content: str) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for field_name in _FIELD_SPAN_RE.findall(content):
+        if field_name not in seen:
+            seen.add(field_name)
+            result.append(field_name)
+    return result
 
 
 def init_db():
@@ -51,95 +92,110 @@ async def health():
     return {"status": "ok"}
 
 
-# ── Chat request / response models ───────────────────────────────────────────
+@app.get("/api/catalog")
+async def get_catalog():
+    return _catalog
+
+
+@app.get("/api/template")
+async def get_template(document_name: str = Query(..., max_length=200)):
+    content = load_template(document_name)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"content": content, "fields": extract_fields(content)}
+
+
+# ── Chat models ───────────────────────────────────────────────────────────────
 
 class ChatMessageIn(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(..., max_length=4000)
 
 
-class PartyFields(BaseModel):
-    name: str = ""
-    title: str = ""
-    company: str = ""
-    noticeAddress: str = ""
-
-
-class NDAFormFields(BaseModel):
-    purpose: str = ""
-    effectiveDate: str = ""
-    mndaTermType: Literal["expires", "continues"] = "expires"
-    mndaTermYears: int = 1
-    confidentialityTermType: Literal["years", "perpetuity"] = "years"
-    confidentialityTermYears: int = 1
-    governingLaw: str = ""
-    jurisdiction: str = ""
-    mndaModifications: str = ""
-    party1: PartyFields = PartyFields()
-    party2: PartyFields = PartyFields()
-
-
 class ChatRequest(BaseModel):
     messages: list[ChatMessageIn] = Field(..., max_length=50)
-    current_fields: NDAFormFields
+    document_name: Optional[str] = Field(None, max_length=200)
+    fields: dict[str, str] = {}
 
 
-# ── Structured output model (returned by LLM) ────────────────────────────────
+# ── LLM structured output model ───────────────────────────────────────────────
 
-class PartyExtraction(BaseModel):
-    name: Optional[str] = None
-    title: Optional[str] = None
-    company: Optional[str] = None
-    noticeAddress: Optional[str] = None
+class FieldUpdate(BaseModel):
+    key: str = Field(..., description="Field name exactly as it appears in the template")
+    value: str = Field(..., description="Value for this field")
 
 
-class NDAExtraction(BaseModel):
-    reply: str
-    purpose: Optional[str] = None
-    effectiveDate: Optional[str] = None
-    mndaTermType: Optional[Literal["expires", "continues"]] = None
-    mndaTermYears: Optional[int] = None
-    confidentialityTermType: Optional[Literal["years", "perpetuity"]] = None
-    confidentialityTermYears: Optional[int] = None
-    governingLaw: Optional[str] = None
-    jurisdiction: Optional[str] = None
-    mndaModifications: Optional[str] = None
-    party1: Optional[PartyExtraction] = None
-    party2: Optional[PartyExtraction] = None
+class DocumentExtraction(BaseModel):
+    reply: str = Field(..., description="Conversational message to show the user")
+    document_name: Optional[str] = Field(
+        None,
+        description="Exact document name from catalog if the user selected one this turn, null otherwise",
+    )
+    field_updates: list[FieldUpdate] = Field(
+        default_factory=list,
+        description="Field values extracted from this conversation turn",
+    )
 
 
-def build_system_prompt(current_fields: NDAFormFields) -> str:
-    return f"""You are a legal document assistant helping a user fill out a Mutual Non-Disclosure Agreement (MNDA).
+# ── System prompts ────────────────────────────────────────────────────────────
 
-Your job is to have a friendly, natural conversation to collect the required information. Ask clear, focused questions—one topic at a time.
+def _selection_prompt() -> str:
+    doc_list = "\n".join(f"- {d['name']}: {d['description']}" for d in _catalog)
+    return f"""You are a legal document assistant for Prelegal.
 
-The MNDA requires the following information:
-- purpose: How confidential information will be used (e.g. "Evaluating a potential business partnership")
-- effectiveDate: When the agreement starts (YYYY-MM-DD format)
-- mndaTermType: "expires" (after N years) or "continues" (until terminated)
-- mndaTermYears: Number of years if mndaTermType is "expires"
-- confidentialityTermType: "years" (for N years) or "perpetuity" (forever)
-- confidentialityTermYears: Number of years if confidentialityTermType is "years"
-- governingLaw: Which US state's laws govern the agreement (e.g. "Delaware")
-- jurisdiction: Specific court location (e.g. "courts located in New Castle, DE")
-- mndaModifications: Any modifications to standard terms (often "None")
-- party1.name, party1.title, party1.company, party1.noticeAddress
-- party2.name, party2.title, party2.company, party2.noticeAddress
+Available documents:
+{doc_list}
 
-Current field values (JSON):
-{current_fields.model_dump_json(indent=2)}
+Your job:
+1. Ask the user what document they need.
+2. Match their request to the closest document in the list above.
+3. If they request something not in the list, explain it is not supported and suggest the closest available option.
+4. Once the user confirms a document, set document_name to the EXACT name from the list.
 
 Rules:
-- Only set a field to non-null if the user has clearly stated that value in this conversation turn
-- Use null for any field you are not changing
-- Keep replies concise—acknowledge what you extracted, then ask about the next missing field
-- Dates must be in YYYY-MM-DD format
-- For party noticeAddress, accept either email or postal address"""
+- Set document_name to the exact catalog name when the user selects or clearly indicates a document.
+- Set document_name to null if no document has been confirmed yet.
+- Leave field_updates empty during selection.
+- **Always end your reply with a question** to advance the conversation."""
 
+
+def _filling_prompt(document_name: str, template_fields: list[str], current_fields: dict) -> str:
+    fields_list = "\n".join(f"- {f}" for f in template_fields)
+    filled = {k: v for k, v in current_fields.items() if v.strip()}
+    unfilled = [f for f in template_fields if not current_fields.get(f, "").strip()]
+
+    return f"""You are a legal document assistant helping a user complete a {document_name}.
+
+Required fields:
+{fields_list}
+
+Already filled:
+{json.dumps(filled, indent=2) if filled else "None yet"}
+
+Still needed:
+{chr(10).join(f"- {f}" for f in unfilled) if unfilled else "All fields collected — ready to review!"}
+
+Rules:
+- Extract only the fields the user clearly states in this turn; add them to field_updates with exact field names from the list above.
+- Keep document_name null (document is already selected).
+- Focus on one or two missing fields per turn — do not overwhelm the user.
+- **Always end your reply with a question** if there are still unfilled fields.
+- If all fields are complete, congratulate the user and invite them to review or download the document."""
+
+
+# ── Chat endpoint ─────────────────────────────────────────────────────────────
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    system_prompt = build_system_prompt(req.current_fields)
+    if req.document_name:
+        content = load_template(req.document_name)
+        if content is None:
+            return {"reply": "I couldn't load that template. Please try again.", "document_name": None, "fields": {}}
+        template_fields = extract_fields(content)
+        system_prompt = _filling_prompt(req.document_name, template_fields, req.fields)
+    else:
+        system_prompt = _selection_prompt()
+
     messages = [{"role": "system", "content": system_prompt}] + [
         {"role": m.role, "content": m.content} for m in req.messages[-20:]
     ]
@@ -148,38 +204,22 @@ async def chat(req: ChatRequest):
         response = completion(
             model=MODEL,
             messages=messages,
-            response_format=NDAExtraction,
+            response_format=DocumentExtraction,
             reasoning_effort="low",
             extra_body=EXTRA_BODY,
         )
-        extraction = NDAExtraction.model_validate_json(response.choices[0].message.content)
+        extraction = DocumentExtraction.model_validate_json(response.choices[0].message.content)
     except Exception as exc:
         print(f"[chat] LLM error: {exc!r}")
-        return {"reply": "I had trouble processing that. Please try again.", "fields": {}}
+        return {"reply": "I had trouble processing that. Please try again.", "document_name": None, "fields": {}}
 
-    fields: dict = {}
-    for field in [
-        "purpose", "effectiveDate", "mndaTermType", "mndaTermYears",
-        "confidentialityTermType", "confidentialityTermYears",
-        "governingLaw", "jurisdiction", "mndaModifications",
-    ]:
-        val = getattr(extraction, field)
-        if val is not None:
-            fields[field] = val
-
-    if extraction.party1:
-        p1 = extraction.party1.model_dump(exclude_none=True)
-        if p1:
-            fields["party1"] = p1
-
-    if extraction.party2:
-        p2 = extraction.party2.model_dump(exclude_none=True)
-        if p2:
-            fields["party2"] = p2
-
-    return {"reply": extraction.reply, "fields": fields}
+    return {
+        "reply": extraction.reply,
+        "document_name": extraction.document_name,
+        "fields": {u.key: u.value for u in extraction.field_updates},
+    }
 
 
-_frontend_dir = os.path.join(os.path.dirname(__file__), "frontend_out")
+_frontend_dir = os.path.join(_BASE_DIR, "frontend_out")
 if os.path.exists(_frontend_dir):
     app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")

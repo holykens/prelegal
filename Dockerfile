@@ -17,8 +17,10 @@ RUN pip install --no-cache-dir uv
 COPY backend/pyproject.toml ./
 RUN uv sync --no-dev
 
-# Copy backend code
+# Copy backend code and document data
 COPY backend/main.py ./
+COPY catalog.json ./
+COPY templates/ ./templates/
 
 # Copy built frontend static files
 COPY --from=frontend-builder /app/frontend/out ./frontend_out

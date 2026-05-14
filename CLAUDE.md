@@ -67,17 +67,27 @@ Backend available at http://localhost:8000
 ### Completed (PL-5) — merged to main
 - AI chat interface replacing the manual form sidebar
 - Tab-based sidebar: **AI Chat** (default) and **Edit Fields** (manual form for review/tweaks)
-- `POST /api/chat` uses LiteLLM → OpenRouter → Cerebras (`openrouter/openai/gpt-oss-120b`) with Pydantic structured outputs to extract NDA field values from conversation
-- Typed `NDAFormFields` Pydantic model validates `current_fields` on every chat request
-- Live document preview updates as AI extracts field values
-- 8 unit tests in `backend/tests/test_chat.py`
-- Mutual NDA only; multi-document support is PL-6
+- `POST /api/chat` uses LiteLLM → OpenRouter → Cerebras (`openrouter/openai/gpt-oss-120b`) with Pydantic structured outputs
+
+### Completed (PL-6) — merged to main
+- All 12 legal document types supported via the same AI chat flow
+- Two-phase chat: document selection phase (AI helps user pick from catalog), then field-filling phase
+- Generic template rendering: extracts `coverpage_link`, `keyterms_link`, `orderform_link` span values as fillable fields; highlights collected values in the live preview
+- `GET /api/catalog` — returns full document catalog
+- `GET /api/template?document_name=...` — returns template content + extracted field names
+- `DocumentState` frontend model (replaces NDA-specific `NDAFormData`)
+- `DocumentPreview` and `FieldsForm` replace the NDA-specific preview and form
+- `catalog.json` and `templates/` now copied into Docker image
+- Focus returned to chat input after each AI response
+- AI system prompt always requires a follow-up question
+- 15 unit tests in `backend/tests/test_chat.py`
 
 ### Current API Endpoints
 - `GET /api/health` — health check
-- `POST /api/chat` — AI chat turn; accepts `{messages, current_fields}`, returns `{reply, fields}`
+- `GET /api/catalog` — full document catalog
+- `GET /api/template?document_name=...` — template markdown + field names
+- `POST /api/chat` — AI chat turn; accepts `{messages, document_name, fields}`, returns `{reply, document_name, fields}`
 
 ### Not yet implemented
-- Multi-document support (PL-6)
 - Real authentication and document persistence (PL-7)
 

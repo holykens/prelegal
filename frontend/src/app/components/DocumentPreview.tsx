@@ -3,33 +3,62 @@
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
-import type { NDAFormData } from "../types";
-import {
-  generateCoverPageMarkdown,
-  generateFilledStandardTerms,
-  generateDownloadMarkdown,
-} from "../utils/ndaGenerator";
+import type { DocumentState } from "../types";
 
 interface Props {
-  data: NDAFormData;
+  docState: DocumentState;
 }
 
-function downloadMarkdown(data: NDAFormData) {
-  const content = generateDownloadMarkdown(data);
+const FIELD_SPAN_CLASSES = ["coverpage_link", "keyterms_link", "orderform_link"];
+
+function fillTemplate(content: string, fields: Record<string, string>): string {
+  let result = content;
+  for (const [key, value] of Object.entries(fields)) {
+    if (!value.trim()) continue;
+    for (const cls of FIELD_SPAN_CLASSES) {
+      result = result
+        .split(`<span class="${cls}">${key}</span>`)
+        .join(`<span class="filled-value">${value}</span>`);
+    }
+  }
+  return result;
+}
+
+function downloadMarkdown(docState: DocumentState) {
+  if (!docState.templateContent) return;
+  const content = fillTemplate(docState.templateContent, docState.fields)
+    .replace(/<span class="filled-value">([^<]+)<\/span>/g, "$1")
+    .replace(/<span[^>]*>([^<]*)<\/span>/g, "$1");
+  const name = (docState.documentName ?? "document").replace(/\s+/g, "-");
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "Mutual-NDA.md";
+  a.download = `${name}.md`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
-export default function NDAPreview({ data }: Props) {
-  const coverPage = generateCoverPageMarkdown(data);
-  const standardTerms = generateFilledStandardTerms(data);
+export default function DocumentPreview({ docState }: Props) {
+  if (!docState.documentName || !docState.templateContent) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center text-center px-8">
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ backgroundColor: "#f0f9ff" }}>
+          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "#209dd7" }}>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        </div>
+        <h2 className="text-base font-semibold mb-2" style={{ color: "#032147" }}>No document selected</h2>
+        <p className="text-sm" style={{ color: "#888888" }}>
+          Start a conversation in the AI Chat tab to select a document and fill it in.
+        </p>
+      </div>
+    );
+  }
+
+  const rendered = fillTemplate(docState.templateContent, docState.fields);
 
   return (
     <div className="flex flex-col h-full">
@@ -43,7 +72,7 @@ export default function NDAPreview({ data }: Props) {
         </p>
         <div className="flex gap-2">
           <button
-            onClick={() => downloadMarkdown(data)}
+            onClick={() => downloadMarkdown(docState)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -53,7 +82,8 @@ export default function NDAPreview({ data }: Props) {
           </button>
           <button
             onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white rounded-md hover:opacity-90 transition-opacity"
+            style={{ backgroundColor: "#209dd7" }}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
@@ -64,7 +94,7 @@ export default function NDAPreview({ data }: Props) {
       </div>
 
       <div
-        id="nda-document"
+        id="document-content"
         className="flex-1 bg-white rounded-lg border border-gray-200 p-8 overflow-y-auto prose prose-sm max-w-none
           prose-headings:font-serif prose-headings:text-gray-900
           prose-h1:text-2xl prose-h1:text-center prose-h1:mb-6
@@ -77,9 +107,7 @@ export default function NDAPreview({ data }: Props) {
           prose-th:border prose-th:border-gray-300 prose-th:px-3 prose-th:py-2 prose-th:text-sm prose-th:bg-gray-50
           prose-a:text-blue-600"
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{coverPage}</ReactMarkdown>
-        <hr className="my-8 border-gray-300" />
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{standardTerms}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{rendered}</ReactMarkdown>
       </div>
     </div>
   );

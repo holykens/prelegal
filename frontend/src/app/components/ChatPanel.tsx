@@ -18,6 +18,13 @@ export default function ChatPanel({ messages, isLoading, onSend }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
+  // Restore focus to input when AI finishes responding
+  useEffect(() => {
+    if (!isLoading) {
+      inputRef.current?.focus();
+    }
+  }, [isLoading]);
+
   function handleSend() {
     const text = draft.trim();
     if (!text || isLoading) return;

@@ -1,34 +1,69 @@
-"""Tests for the /api/chat endpoint."""
+"""Tests for the Prelegal backend API."""
 import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app, build_system_prompt, NDAFormFields, PartyFields
+from main import app, extract_fields, _selection_prompt, _filling_prompt
 
 client = TestClient(app)
 
 
-# ── build_system_prompt ──────────────────────────────────────────────────────
+# ── extract_fields ────────────────────────────────────────────────────────────
 
-def test_build_system_prompt_includes_current_fields():
-    fields = NDAFormFields(purpose="Test purpose", governingLaw="Delaware")
-    prompt = build_system_prompt(fields)
-    assert "Test purpose" in prompt
-    assert "Delaware" in prompt
+def test_extract_fields_coverpage_link():
+    content = '<span class="coverpage_link">Purpose</span> and <span class="coverpage_link">Effective Date</span>'
+    assert extract_fields(content) == ["Purpose", "Effective Date"]
 
 
-def test_build_system_prompt_contains_field_names():
-    prompt = build_system_prompt(NDAFormFields())
-    for field in ["purpose", "effectiveDate", "mndaTermType", "governingLaw", "jurisdiction"]:
-        assert field in prompt
+def test_extract_fields_keyterms_link():
+    content = '<span class="keyterms_link">Partner</span> and <span class="keyterms_link">Provider</span>'
+    assert extract_fields(content) == ["Partner", "Provider"]
 
 
-# ── helper: build fake litellm response ─────────────────────────────────────
+def test_extract_fields_orderform_link():
+    content = '<span class="orderform_link">Pilot Period</span>'
+    assert extract_fields(content) == ["Pilot Period"]
 
-def _mock_llm(reply: str, **extra_fields):
-    payload = {"reply": reply, **extra_fields}
+
+def test_extract_fields_deduplicates():
+    content = (
+        '<span class="coverpage_link">Purpose</span> '
+        '<span class="coverpage_link">Purpose</span>'
+    )
+    assert extract_fields(content) == ["Purpose"]
+
+
+def test_extract_fields_ignores_header_spans():
+    content = '<span class="header_2">Section Title</span> <span class="coverpage_link">Field</span>'
+    assert extract_fields(content) == ["Field"]
+
+
+# ── system prompts ────────────────────────────────────────────────────────────
+
+def test_selection_prompt_lists_documents():
+    prompt = _selection_prompt()
+    assert "Mutual Non-Disclosure Agreement" in prompt
+    assert "Cloud Service Agreement" in prompt
+
+
+def test_filling_prompt_includes_unfilled():
+    fields = {"Provider": "Acme"}
+    prompt = _filling_prompt("Pilot Agreement", ["Provider", "Customer", "Pilot Period"], fields)
+    assert "Customer" in prompt
+    assert "Pilot Period" in prompt
+    assert "Acme" in prompt
+
+
+# ── helper: build fake litellm response ──────────────────────────────────────
+
+def _mock_llm(reply: str, document_name=None, field_updates=None):
+    payload = {
+        "reply": reply,
+        "document_name": document_name,
+        "field_updates": field_updates or [],
+    }
     msg = MagicMock()
     msg.content = json.dumps(payload)
     choice = MagicMock()
@@ -38,96 +73,95 @@ def _mock_llm(reply: str, **extra_fields):
     return response
 
 
-BASE_FIELDS = {
-    "purpose": "",
-    "effectiveDate": "2026-05-14",
-    "mndaTermType": "expires",
-    "mndaTermYears": 1,
-    "confidentialityTermType": "years",
-    "confidentialityTermYears": 1,
-    "governingLaw": "",
-    "jurisdiction": "",
-    "mndaModifications": "",
-    "party1": {"name": "", "title": "", "company": "", "noticeAddress": ""},
-    "party2": {"name": "", "title": "", "company": "", "noticeAddress": ""},
-}
-
-
-# ── /api/chat ────────────────────────────────────────────────────────────────
+# ── /api/chat — document selection phase ─────────────────────────────────────
 
 @patch("main.completion")
-def test_chat_returns_reply_and_empty_fields(mock_completion):
-    mock_completion.return_value = _mock_llm("Hello! What is the purpose of this NDA?")
-    res = client.post("/api/chat", json={"messages": [], "current_fields": BASE_FIELDS})
+def test_chat_selection_phase_returns_reply(mock_completion):
+    mock_completion.return_value = _mock_llm("What document do you need?")
+    res = client.post("/api/chat", json={"messages": [], "document_name": None, "fields": {}})
     assert res.status_code == 200
     data = res.json()
-    assert data["reply"] == "Hello! What is the purpose of this NDA?"
+    assert data["reply"] == "What document do you need?"
+    assert data["document_name"] is None
     assert data["fields"] == {}
 
 
 @patch("main.completion")
-def test_chat_extracts_governing_law(mock_completion):
+def test_chat_selects_document(mock_completion):
     mock_completion.return_value = _mock_llm(
-        "Got it—Delaware law it is. What city for jurisdiction?",
-        governingLaw="Delaware",
+        "Great! Let's fill out the Mutual NDA.",
+        document_name="Mutual Non-Disclosure Agreement",
     )
-    res = client.post(
-        "/api/chat",
-        json={
-            "messages": [{"role": "user", "content": "Use Delaware law"}],
-            "current_fields": BASE_FIELDS,
-        },
-    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "I need an NDA"}],
+        "document_name": None,
+        "fields": {},
+    })
     assert res.status_code == 200
-    assert res.json()["fields"]["governingLaw"] == "Delaware"
+    assert res.json()["document_name"] == "Mutual Non-Disclosure Agreement"
 
 
-@patch("main.completion")
-def test_chat_extracts_party_companies(mock_completion):
-    mock_completion.return_value = _mock_llm(
-        "Party 1 is Acme Corp, Party 2 is Widget Ltd.",
-        party1={"company": "Acme Corp"},
-        party2={"company": "Widget Ltd"},
-    )
-    res = client.post(
-        "/api/chat",
-        json={
-            "messages": [{"role": "user", "content": "Acme Corp and Widget Ltd"}],
-            "current_fields": BASE_FIELDS,
-        },
-    )
-    data = res.json()
-    assert data["fields"]["party1"]["company"] == "Acme Corp"
-    assert data["fields"]["party2"]["company"] == "Widget Ltd"
-
+# ── /api/chat — field filling phase ──────────────────────────────────────────
 
 @patch("main.completion")
-def test_chat_null_fields_excluded_from_response(mock_completion):
-    """Null LLM fields must not appear in returned fields dict."""
+def test_chat_extracts_fields(mock_completion):
     mock_completion.return_value = _mock_llm(
-        "Noted.",
-        purpose=None,
-        governingLaw="California",
+        "Got it! What state governs this agreement?",
+        field_updates=[
+            {"key": "Provider", "value": "Acme Corp"},
+            {"key": "Customer", "value": "Widget Ltd"},
+        ],
     )
-    res = client.post(
-        "/api/chat",
-        json={"messages": [{"role": "user", "content": "California"}], "current_fields": BASE_FIELDS},
-    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "Provider is Acme Corp, customer is Widget Ltd"}],
+        "document_name": "Pilot Agreement",
+        "fields": {},
+    })
+    assert res.status_code == 200
     data = res.json()
-    assert "purpose" not in data["fields"]
-    assert data["fields"]["governingLaw"] == "California"
+    assert data["fields"]["Provider"] == "Acme Corp"
+    assert data["fields"]["Customer"] == "Widget Ltd"
 
 
 @patch("main.completion", side_effect=Exception("LLM unavailable"))
-def test_chat_handles_llm_error_gracefully(mock_completion):
-    res = client.post("/api/chat", json={"messages": [], "current_fields": BASE_FIELDS})
+def test_chat_handles_llm_error(mock_completion):
+    res = client.post("/api/chat", json={"messages": [], "document_name": None, "fields": {}})
     assert res.status_code == 200
     data = res.json()
     assert data["fields"] == {}
     assert len(data["reply"]) > 0
 
 
-# ── /api/health ──────────────────────────────────────────────────────────────
+# ── /api/catalog ──────────────────────────────────────────────────────────────
+
+def test_catalog_returns_list():
+    res = client.get("/api/catalog")
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert "name" in data[0]
+    assert "filename" in data[0]
+
+
+# ── /api/template ─────────────────────────────────────────────────────────────
+
+def test_template_returns_content_and_fields():
+    res = client.get("/api/template", params={"document_name": "Mutual Non-Disclosure Agreement"})
+    assert res.status_code == 200
+    data = res.json()
+    assert "content" in data
+    assert "fields" in data
+    assert isinstance(data["fields"], list)
+    assert len(data["fields"]) > 0
+
+
+def test_template_returns_404_for_unknown():
+    res = client.get("/api/template", params={"document_name": "Nonexistent Document"})
+    assert res.status_code == 404
+
+
+# ── /api/health ───────────────────────────────────────────────────────────────
 
 def test_health():
     res = client.get("/api/health")
