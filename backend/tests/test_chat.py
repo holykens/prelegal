@@ -143,6 +143,26 @@ def test_chat_safety_net4_extracts_ack_from_reply(mock_completion):
 
 
 @patch("main.completion")
+def test_chat_safety_net4_verb_first_pattern(mock_completion):
+    """S4: handle 'I've noted the X as Y' (verb before field name)."""
+    mock_completion.return_value = _mock_llm(
+        "I've noted the Technical Support as: a website developed and maintained.",
+        slots=[],
+    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "website developed and maintained"}],
+        "document_name": "Cloud Service Agreement",
+        "fields": {},
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert "Technical Support" in data["fields"], (
+        f"S4 should handle verb-first pattern, got fields: {data['fields']}"
+    )
+    assert "website" in data["fields"]["Technical Support"].lower()
+
+
+@patch("main.completion")
 def test_chat_appends_followup_when_reply_has_no_question(mock_completion):
     """Backend must append a follow-up question even when the model forgets to."""
     mock_completion.return_value = _mock_llm(

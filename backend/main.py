@@ -309,12 +309,13 @@ async def chat(req: ChatRequest):
 
     # Safety net 4: if the model acknowledges setting a field value in its reply text but
     # forgot to put it in slots, extract the value from the acknowledgment.
-    # Handles: "Payment Process has been set to: ...", "Got it, I've recorded X as ..."
-    _S4_ACK_RE = re.compile(
-        r'(?:has been set|is set|have been set|set|recorded|captured|noted|added|updated|is now)\s*'
-        r'(?:to|as)[:\s]+(.+)',
-        re.I,
-    )
+    # Handles two patterns:
+    #   field-first:  "Payment Process has been set to: ..."
+    #   verb-first:   "I've noted the Technical Support as: ..."
+    _S4_VERBS = (r"has been set|have been set|is set|are set|set|recorded|"
+                 r"captured|noted|added|updated|is now")
+    _S4_VERB_RE = re.compile(rf"\b(?:{_S4_VERBS})\b", re.I)
+    _S4_VALUE_RE = re.compile(r"(?:to|as)[:\s]+(.+)", re.I)
     if req.document_name and template_fields and reply:
         reply_lower_s4 = reply.lower()
         for field in template_fields:
@@ -322,20 +323,27 @@ async def chat(req: ChatRequest):
                 continue
             field_lower = field.lower()
             idx = reply_lower_s4.find(field_lower)
-            # Only act when the field name appears within the first 80 chars of the reply
-            # (i.e. the model is clearly leading with an acknowledgment of this field)
-            if 0 <= idx <= 80:
-                remainder = reply[idx + len(field):]
-                m = _S4_ACK_RE.search(remainder)
-                if m:
-                    raw = m.group(1).strip()
-                    # Stop at the first sentence boundary to avoid grabbing the follow-up question
-                    sentence_end = re.search(r'[.?!]', raw)
-                    val = (raw[: sentence_end.start()].strip() if sentence_end else raw).rstrip(".,!?")
-                    if 3 <= len(val) <= 500:
-                        new_fields[field] = val
-                        print(f"[chat] S4 ack: {field!r} → {val[:60]!r}")
-                        break  # one field per safety-net pass to avoid false matches
+            if not (0 <= idx <= 100):
+                continue
+            # Look for an ack verb in a window around the field name. Covers both:
+            #   "<Field> has been set to ..."  (verb after field)
+            #   "I've noted the <Field> as ..." (verb before field)
+            window = reply[max(0, idx - 40): idx + len(field) + 40]
+            if not _S4_VERB_RE.search(window):
+                continue
+            after_field = reply[idx + len(field):]
+            m = _S4_VALUE_RE.search(after_field)
+            if not m:
+                continue
+            raw = m.group(1).strip()
+            sentence_end = re.search(r"[.?!]", raw)
+            val = (raw[: sentence_end.start()].strip() if sentence_end else raw).rstrip(".,!?")
+            # Strip surrounding quotes (straight or curly)
+            val = val.strip("'\"" + "‘’“”")
+            if 3 <= len(val) <= 500:
+                new_fields[field] = val
+                print(f"[chat] S4 ack: {field!r} → {val[:60]!r}")
+                break  # one field per pass to avoid false matches
 
     # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
     # A field is "handled" once it has any key in the combined fields dict (even value "None").
