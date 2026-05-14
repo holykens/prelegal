@@ -18,6 +18,14 @@ export default function ChatPanel({ messages, isLoading, onSend }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
+  // Auto-grow the textarea as the user types
+  useEffect(() => {
+    const ta = inputRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  }, [draft]);
+
   // Restore focus to input when AI finishes responding
   useEffect(() => {
     if (!isLoading) {
@@ -87,14 +95,13 @@ export default function ChatPanel({ messages, isLoading, onSend }: Props) {
       <div className="shrink-0 border-t border-gray-100 px-3 py-3 flex gap-2 items-end">
         <textarea
           ref={inputRef}
-          rows={1}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message…"
+          placeholder="Type a message… (Shift+Enter for new line)"
           disabled={isLoading}
-          className="flex-1 resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50"
-          style={{ maxHeight: "120px" }}
+          className="flex-1 resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50 overflow-y-auto"
+          style={{ minHeight: "40px", maxHeight: "200px" }}
         />
         <button
           onClick={handleSend}

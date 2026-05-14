@@ -11,14 +11,23 @@ interface Props {
 
 const FIELD_SPAN_CLASSES = ["coverpage_link", "keyterms_link", "orderform_link"];
 
+function variantsOf(key: string): string[] {
+  const v = [key, key + "s", key + "'s", key + "'s"];
+  if (key.endsWith("s") && key.length > 2) v.push(key.slice(0, -1));
+  return v;
+}
+
 function fillTemplate(content: string, fields: Record<string, string>): string {
   let result = content;
   for (const [key, value] of Object.entries(fields)) {
-    if (!value.trim()) continue;
+    // Skip intentionally-empty fields — don't highlight "None" in the document
+    if (!value.trim() || value === "None") continue;
     for (const cls of FIELD_SPAN_CLASSES) {
-      result = result
-        .split(`<span class="${cls}">${key}</span>`)
-        .join(`<span class="filled-value">${value}</span>`);
+      for (const variant of variantsOf(key)) {
+        result = result
+          .split(`<span class="${cls}">${variant}</span>`)
+          .join(`<span class="filled-value">${value}</span>`);
+      }
     }
   }
   return result;

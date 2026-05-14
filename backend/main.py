@@ -67,6 +67,35 @@ def extract_fields(content: str) -> list[str]:
     return result
 
 
+def _related_names(field: str) -> list[str]:
+    """Return plural, singular, and possessive variants of a field name."""
+    variants = []
+    # Plural: field + "s"
+    variants.append(field + "s")
+    # Singular: strip trailing "s"
+    if field.endswith("s") and len(field) > 2:
+        variants.append(field[:-1])
+    # Possessive: field + "'s"
+    variants.append(field + "’s")  # curly apostrophe
+    variants.append(field + "'s")       # straight apostrophe
+    # Base of possessive
+    for suffix in ("’s", "'s"):
+        if field.endswith(suffix):
+            variants.append(field[: -len(suffix)])
+    return variants
+
+
+def _propagate_variants(new_fields: dict[str, str], template_fields: list[str],
+                        existing_fields: dict[str, str]) -> dict[str, str]:
+    """When a field is set, also set its plural/singular/possessive variants."""
+    result = dict(new_fields)
+    for key, value in list(new_fields.items()):
+        for variant in _related_names(key):
+            if variant in template_fields and variant not in result and variant not in existing_fields:
+                result[variant] = value
+    return result
+
+
 def init_db():
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
@@ -236,6 +265,22 @@ async def chat(req: ChatRequest):
         reply = ""  # will be rebuilt below
 
     new_fields = {u.key: u.value for u in extraction.slots}
+
+    # Safety net 1: detect when the user explicitly skips a field by name.
+    # e.g. "leave Use Limitations empty" → auto-set {"Use Limitations": "None"}
+    if req.messages and req.document_name and template_fields:
+        last_msg = req.messages[-1].content.lower()
+        _skip_signals = {"empty", "blank", "none", "skip", "n/a", "leave it", "leave empty", "leave blank"}
+        if any(s in last_msg for s in _skip_signals):
+            for field in template_fields:
+                if field not in new_fields and field not in req.fields:
+                    if field.lower() in last_msg:
+                        new_fields[field] = "None"
+
+    # Safety net 2: auto-propagate plural, singular, and possessive variants.
+    # e.g. setting "Subscription Period" also sets "Subscription Periods"; "Customer" → "Customer's"
+    if req.document_name and template_fields:
+        new_fields = _propagate_variants(new_fields, template_fields, req.fields)
 
     # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
     # A field is "handled" once it has any key in the combined fields dict (even value "None").
