@@ -26,7 +26,7 @@ export default function Home() {
         <span className="text-xs bg-blue-50 text-blue-700 font-medium px-2 py-1 rounded-full">Prototype</span>
       </header>
 
-      <div className="flex" style={{ height: "calc(100vh - 53px)" }}>
+      <div className="app-layout flex" style={{ height: "calc(100vh - 53px)" }}>
         <aside className="w-80 shrink-0 overflow-y-auto border-r border-gray-200 bg-white px-5 py-5 print:hidden">
           <NDAForm data={formData} onChange={setFormData} />
         </aside>

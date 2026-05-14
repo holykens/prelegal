@@ -19,15 +19,36 @@
     display: none !important;
   }
 
+  /*
+   * The app layout div has an inline height: calc(100vh - 53px) which caps
+   * the printable area to one screen. Override the entire ancestor chain so
+   * all content flows naturally across print pages.
+   */
+  .app-layout {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
   main {
     display: block !important;
+    height: auto !important;
+    overflow: visible !important;
     padding: 0 !important;
+  }
+
+  /* NDAPreview outer wrapper (flex-col h-full) */
+  main > div {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
   #nda-document {
     border: none !important;
     padding: 0 !important;
     overflow: visible !important;
+    height: auto !important;
     max-height: none !important;
   }
 
