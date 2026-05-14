@@ -141,6 +141,27 @@ def test_chat_appends_followup_when_reply_has_no_question(mock_completion):
 
 
 @patch("main.completion")
+def test_chat_does_not_re_ask_field_set_to_none(mock_completion):
+    """A field set to 'None' (user said leave empty) must not be appended as a follow-up question."""
+    mock_completion.return_value = _mock_llm(
+        "Noted, moving on.",  # reply already ends without '?'
+        slots=[{"key": "Use Limitations", "value": "None"}],
+    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "Leave Use Limitations empty"}],
+        "document_name": "Cloud Service Agreement",
+        # Use Limitations is already in fields — the backend should NOT re-ask it
+        "fields": {"Customer": "Ken", "Provider": "Ryu", "Use Limitations": "None"},
+    })
+    assert res.status_code == 200
+    reply = res.json()["reply"]
+    # The backend appends a follow-up, but it must NOT be about Use Limitations
+    assert "What is the Use Limitations" not in reply, f"Re-asked handled field: {reply!r}"
+    # The follow-up must still end with '?' (other fields remain)
+    assert reply.endswith("?"), f"Expected a follow-up question, got: {reply!r}"
+
+
+@patch("main.completion")
 def test_chat_does_not_append_followup_when_reply_already_has_question(mock_completion):
     """Backend must NOT double-append a question if the model already asked one."""
     mock_completion.return_value = _mock_llm(

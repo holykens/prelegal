@@ -170,27 +170,31 @@ Rules:
 
 def _filling_prompt(document_name: str, template_fields: list[str], current_fields: dict) -> str:
     fields_list = "\n".join(f"- {f}" for f in template_fields)
-    filled = {k: v for k, v in current_fields.items() if v.strip()}
-    unfilled = [f for f in template_fields if not current_fields.get(f, "").strip()]
+    # A field is "handled" when it has any entry in current_fields (even "None")
+    handled = set(current_fields.keys())
+    filled_display = {k: v for k, v in current_fields.items()}
+    unfilled = [f for f in template_fields if f not in handled]
 
     return f"""You are a legal document assistant helping a user complete a {document_name}.
 
 Required fields:
 {fields_list}
 
-Already filled:
-{json.dumps(filled, indent=2) if filled else "None yet"}
+Already handled:
+{json.dumps(filled_display, indent=2) if filled_display else "None yet"}
 
 Still needed:
 {chr(10).join(f"- {f}" for f in unfilled) if unfilled else "All fields collected — ready to review!"}
 
 Rules:
-- When the user provides a value that matches one of the required fields above, capture it using the exact field name from the list.
+- When the user provides a value for a required field, capture it with the exact field name from the list.
+- If the user says to leave a field blank, empty, skip, or "none", set it to the string "None" so it is marked as handled and we can move on.
+- Once a field is in the "Already handled" list, never ask about it again — it is done.
 - Keep document_name null (document is already selected).
-- Focus on one or two missing fields per turn — do not overwhelm the user.
+- Focus on one or two still-needed fields per turn — do not overwhelm the user.
 - Your reply must be natural conversational English — never output a field name, JSON key, or code word as your reply.
-- If all fields are complete, congratulate the user and invite them to review or download the document.
-- MANDATORY: If there are any unfilled fields, the very last sentence of your reply MUST be a question asking for the next missing piece of information. Your reply cannot end without a question mark (?) when fields remain unfilled."""
+- If all fields are handled, congratulate the user and invite them to review or download the document.
+- MANDATORY: If there are any still-needed fields, the very last sentence of your reply MUST be a question asking for the next one. Your reply cannot end without a question mark (?) when fields remain."""
 
 
 # ── Chat endpoint ─────────────────────────────────────────────────────────────
@@ -234,10 +238,10 @@ async def chat(req: ChatRequest):
     new_fields = {u.key: u.value for u in extraction.slots}
 
     # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
-    # If there are still unfilled fields and the reply doesn't end with '?', append the next question.
+    # A field is "handled" once it has any key in the combined fields dict (even value "None").
     if req.document_name and template_fields:
         already_filled = {**req.fields, **new_fields}
-        still_unfilled = [f for f in template_fields if not already_filled.get(f, "").strip()]
+        still_unfilled = [f for f in template_fields if f not in already_filled]
 
         if still_unfilled:
             if not reply:
