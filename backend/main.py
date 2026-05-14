@@ -223,27 +223,37 @@ async def chat(req: ChatRequest):
         print(f"[chat] LLM error: {exc!r}")
         return {"reply": "I had trouble processing that. Please try again.", "document_name": None, "fields": {}}
 
-    # Guard against the model echoing a schema key as the reply (e.g. "field_updates", "slots").
-    # If the reply looks wrong, generate a sensible fallback from the remaining fields list.
+    # Guard against the model echoing a schema key as the reply.
     _bad_reply_tokens = {"slots", "field_updates", "document_name", "reply", "key", "value",
                          "null", "true", "false", "none", "extracted", "values"}
     reply = extraction.reply.strip()
     if not reply or reply.lower() in _bad_reply_tokens or len(reply) < 8:
         print(f"[chat] bad reply detected: {reply!r}")
-        if req.document_name and template_fields:
-            next_field = next((f for f in template_fields if not req.fields.get(f, "").strip()), None)
-            reply = (
-                f"Got it! Could you tell me the {next_field} for this agreement?"
-                if next_field
-                else "All fields are complete! You can review and download the document."
-            )
-        else:
-            reply = "What type of legal document do you need help with today?"
+        reply = ""  # will be rebuilt below
+
+    new_fields = {u.key: u.value for u in extraction.slots}
+
+    # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
+    # If there are still unfilled fields and the reply doesn't end with '?', append the next question.
+    if req.document_name and template_fields:
+        already_filled = {**req.fields, **new_fields}
+        still_unfilled = [f for f in template_fields if not already_filled.get(f, "").strip()]
+
+        if still_unfilled:
+            if not reply:
+                reply = f"Got it! Could you tell me the {still_unfilled[0]} for this agreement?"
+            elif not reply.endswith("?"):
+                reply = reply.rstrip(".!") + f" What is the {still_unfilled[0]}?"
+        elif not reply:
+            reply = "All fields are complete! You can review and download the document."
+
+    elif not reply:
+        reply = "What type of legal document do you need help with today?"
 
     return {
         "reply": reply,
         "document_name": extraction.document_name,
-        "fields": {u.key: u.value for u in extraction.slots},
+        "fields": new_fields,
     }
 
 

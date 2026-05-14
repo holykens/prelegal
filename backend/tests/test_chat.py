@@ -123,6 +123,42 @@ def test_chat_extracts_fields(mock_completion):
     assert data["fields"]["Customer"] == "Widget Ltd"
 
 
+@patch("main.completion")
+def test_chat_appends_followup_when_reply_has_no_question(mock_completion):
+    """Backend must append a follow-up question even when the model forgets to."""
+    mock_completion.return_value = _mock_llm(
+        "Got it, the Customer is Ken Masters.",  # no '?' — model forgot to ask next question
+        slots=[{"key": "Customer", "value": "Ken Masters"}],
+    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "Customer is Ken Masters"}],
+        "document_name": "Pilot Agreement",
+        "fields": {},
+    })
+    assert res.status_code == 200
+    reply = res.json()["reply"]
+    assert reply.endswith("?"), f"Expected reply to end with '?', got: {reply!r}"
+
+
+@patch("main.completion")
+def test_chat_does_not_append_followup_when_reply_already_has_question(mock_completion):
+    """Backend must NOT double-append a question if the model already asked one."""
+    mock_completion.return_value = _mock_llm(
+        "Got it! Who is the Provider for this agreement?",
+        slots=[{"key": "Customer", "value": "Ken Masters"}],
+    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "Customer is Ken Masters"}],
+        "document_name": "Pilot Agreement",
+        "fields": {},
+    })
+    assert res.status_code == 200
+    reply = res.json()["reply"]
+    # Should end with exactly one '?'
+    assert reply.count("?") >= 1
+    assert reply == "Got it! Who is the Provider for this agreement?"
+
+
 @patch("main.completion", side_effect=Exception("LLM unavailable"))
 def test_chat_handles_llm_error(mock_completion):
     res = client.post("/api/chat", json={"messages": [], "document_name": None, "fields": {}})
