@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__atlassian__getAccessibleAtlassianResources",
+      "mcp__atlassian__getJiraIssue",
+      "mcp__github__search_repositories",
+      "PowerShell($json = Get-Content 'C:\\\\Users\\\\Dell\\\\.claude\\\\projects\\\\C--Users-Dell-Desktop-temp-folder-AI-Coder---Complete-Claude-Code---Coding-Agents-Course-Lecture-53--Day-4---Connecting-Claude-Code-to-Jira-MCP-Server---GitHub-Repository-prelegal\\\\08184479-36b1-48e3-abbb-0263e5581103\\\\tool-results\\\\toolu_01JeGfoJa7oP6ThStZvZdhz2.json' -Raw | ConvertFrom-Json; $data = $json[0].text | ConvertFrom-Json; $data.items | Select-Object name, description | Format-List)",
+      "mcp__github__get_file_contents",
+      "Bash(git checkout *)",
+      "mcp__github__create_pull_request",
+      "mcp__atlassian__getTransitionsForJiraIssue",
+      "mcp__atlassian__transitionJiraIssue",
+      "WebFetch(domain:localhost)",
+      "PowerShell($response = Invoke-WebRequest -Uri \"http://localhost:3001/\" -UseBasicParsing -TimeoutSec 10; Write-Output \"Status: $\\($response.StatusCode\\)\"; $response.Content | Select-String -Pattern \"\\(error|Error|Application error|form|button|heading|NDA|Party|Purpose|Effective\\)\" | Select-Object -First 30 | ForEach-Object { $_.Line.Trim\\(\\) })",
+      "Bash(where npm *)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3002/\" -UseBasicParsing -TimeoutSec 10; $r.Content | Select-String -Pattern \"<table|<tr|<td|PARTY\" | Select-Object -First 10 | ForEach-Object { $_.Line.Trim\\(\\).Substring\\(0, [Math]::Min\\(200, $_.Line.Trim\\(\\).Length\\)\\) })",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3003/\" -UseBasicParsing -TimeoutSec 10; $html = $r.Content; $idx = $html.IndexOf\\(\"app-layout\"\\); if \\($idx -ge 0\\) { Write-Output \"app-layout class FOUND\"; Write-Output $html.Substring\\($idx - 5, [Math]::Min\\(80, $html.Length - $idx + 5\\)\\) } else { Write-Output \"app-layout class NOT found\" })"
+    ]
+  }
+}
