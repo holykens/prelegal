@@ -2,6 +2,7 @@
 
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
+import remarkGfm from "remark-gfm";
 import type { NDAFormData } from "../types";
 import {
   generateCoverPageMarkdown,
@@ -76,9 +77,9 @@ export default function NDAPreview({ data }: Props) {
           prose-th:border prose-th:border-gray-300 prose-th:px-3 prose-th:py-2 prose-th:text-sm prose-th:bg-gray-50
           prose-a:text-blue-600"
       >
-        <ReactMarkdown rehypePlugins={[rehypeRaw]}>{coverPage}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{coverPage}</ReactMarkdown>
         <hr className="my-8 border-gray-300" />
-        <ReactMarkdown rehypePlugins={[rehypeRaw]}>{standardTerms}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{standardTerms}</ReactMarkdown>
       </div>
     </div>
   );
