@@ -179,8 +179,8 @@ Rules:
 - Extract only the fields the user clearly states in this turn; add them to field_updates with exact field names from the list above.
 - Keep document_name null (document is already selected).
 - Focus on one or two missing fields per turn — do not overwhelm the user.
-- **Always end your reply with a question** if there are still unfilled fields.
-- If all fields are complete, congratulate the user and invite them to review or download the document."""
+- If all fields are complete, congratulate the user and invite them to review or download the document.
+- MANDATORY: If there are any unfilled fields, the very last sentence of your reply MUST be a question asking for the next missing piece of information. Your reply cannot end without a question mark (?) when fields remain unfilled."""
 
 
 # ── Chat endpoint ─────────────────────────────────────────────────────────────

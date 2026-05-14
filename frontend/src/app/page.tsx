@@ -19,52 +19,68 @@ export default function Home() {
   const docStateRef = useRef(docState);
   useEffect(() => { docStateRef.current = docState; }, [docState]);
 
-  useEffect(() => {
-    if (!localStorage.getItem("pl_logged_in")) {
-      router.replace("/login");
-    }
-  }, [router]);
-
-  async function handleSend(text: string) {
-    const userMsg: ChatMessage = { role: "user", content: text };
-    const updated = [...messages, userMsg];
-    setMessages(updated);
+  // Core chat caller. Stays loading for the entire turn (including auto-follow-up
+  // after document selection) so the UI never flickers between two AI messages.
+  async function callChat(
+    messagesToSend: ChatMessage[],
+    documentName: string | null,
+    currentFields: Record<string, string>,
+  ) {
     setIsLoading(true);
-
     try {
-      const { documentName, fields } = docStateRef.current;
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: updated, document_name: documentName, fields }),
+        body: JSON.stringify({ messages: messagesToSend, document_name: documentName, fields: currentFields }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
-      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
-
       const incomingDoc: string | null = data.document_name ?? null;
       const incomingFields: Record<string, string> = data.fields ?? {};
 
-      if (incomingDoc && incomingDoc !== docStateRef.current.documentName) {
-        // New document selected — fetch its template
+      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+
+      if (incomingDoc && incomingDoc !== documentName) {
+        // A document was just selected — fetch the template, then immediately ask
+        // the first field question so the user never has to send a blank message.
         const tmplRes = await fetch(
           `${API_BASE}/api/template?document_name=${encodeURIComponent(incomingDoc)}`
         );
         if (tmplRes.ok) {
           const tmpl = await tmplRes.json();
-          setDocState((prev) => ({
+          const newFields = { ...currentFields, ...incomingFields };
+          setDocState({
             documentName: incomingDoc,
             templateContent: tmpl.content,
             allFields: tmpl.fields,
-            fields: { ...prev.fields, ...incomingFields },
-          }));
+            fields: newFields,
+          });
+
+          // Auto-trigger: now that we know the template fields, ask the first question
+          const withConfirmation: ChatMessage[] = [
+            ...messagesToSend,
+            { role: "assistant", content: data.reply },
+          ];
+          const followRes = await fetch(`${API_BASE}/api/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messages: withConfirmation,
+              document_name: incomingDoc,
+              fields: newFields,
+            }),
+          });
+          if (followRes.ok) {
+            const followData = await followRes.json();
+            setMessages((prev) => [...prev, { role: "assistant", content: followData.reply }]);
+            if (followData.fields && Object.keys(followData.fields).length > 0) {
+              setDocState((prev) => ({ ...prev, fields: { ...prev.fields, ...followData.fields } }));
+            }
+          }
         }
       } else if (Object.keys(incomingFields).length > 0) {
-        setDocState((prev) => ({
-          ...prev,
-          fields: { ...prev.fields, ...incomingFields },
-        }));
+        setDocState((prev) => ({ ...prev, fields: { ...prev.fields, ...incomingFields } }));
       }
     } catch {
       setMessages((prev) => [
@@ -74,6 +90,23 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  // Auth check + auto-initialize the chat with an AI greeting on mount
+  useEffect(() => {
+    if (!localStorage.getItem("pl_logged_in")) {
+      router.replace("/login");
+      return;
+    }
+    callChat([], null, {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSend(text: string) {
+    const userMsg: ChatMessage = { role: "user", content: text };
+    const updated = [...messages, userMsg];
+    setMessages(updated);
+    await callChat(updated, docStateRef.current.documentName, docStateRef.current.fields);
   }
 
   const docTitle = docState.documentName ?? "Legal Document Assistant";
