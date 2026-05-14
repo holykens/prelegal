@@ -19,6 +19,11 @@ export interface NDAFormData {
   party2: Party;
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export const defaultFormData: NDAFormData = {
   purpose:
     "Evaluating whether to enter into a business relationship with the other party.",
