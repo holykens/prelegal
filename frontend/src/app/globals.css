@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Filled-in NDA values are highlighted amber */
+.filled-value {
+  @apply bg-amber-100 text-amber-900 px-0.5 rounded font-medium not-italic;
+}
+
+/* Print: hide the form sidebar and action buttons, show only the document */
+@media print {
+  body {
+    background: white !important;
+  }
+
+  aside,
+  header,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  main {
+    display: block !important;
+    padding: 0 !important;
+  }
+
+  #nda-document {
+    border: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .filled-value {
+    background: none !important;
+    font-weight: 600;
+    text-decoration: underline;
+  }
+}
