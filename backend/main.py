@@ -126,14 +126,22 @@ class FieldUpdate(BaseModel):
 
 
 class DocumentExtraction(BaseModel):
-    reply: str = Field(..., description="Conversational message to show the user")
+    reply: str = Field(
+        ...,
+        description=(
+            "Your natural language message to the user. "
+            "Write 1-3 complete sentences in plain conversational English. "
+            "This must NOT be a JSON key name, a field name, or a code identifier — "
+            "it must be actual human-readable text."
+        ),
+    )
     document_name: Optional[str] = Field(
         None,
         description="Exact document name from catalog if the user selected one this turn, null otherwise",
     )
-    field_updates: list[FieldUpdate] = Field(
+    slots: list[FieldUpdate] = Field(
         default_factory=list,
-        description="Field values extracted from this conversation turn",
+        description="Field name/value pairs extracted from what the user said this turn",
     )
 
 
@@ -155,8 +163,9 @@ Your job:
 Rules:
 - Set document_name to the exact catalog name when the user selects or clearly indicates a document.
 - Set document_name to null if no document has been confirmed yet.
-- Leave field_updates empty during selection.
-- **Always end your reply with a question** to advance the conversation."""
+- Do not extract any field values during the selection phase; slots must stay empty.
+- Your reply must be natural conversational English — a complete sentence, never a field name or code keyword.
+- Always end your reply with a question to advance the conversation."""
 
 
 def _filling_prompt(document_name: str, template_fields: list[str], current_fields: dict) -> str:
@@ -176,9 +185,10 @@ Still needed:
 {chr(10).join(f"- {f}" for f in unfilled) if unfilled else "All fields collected — ready to review!"}
 
 Rules:
-- Extract only the fields the user clearly states in this turn; add them to field_updates with exact field names from the list above.
+- When the user provides a value that matches one of the required fields above, capture it using the exact field name from the list.
 - Keep document_name null (document is already selected).
 - Focus on one or two missing fields per turn — do not overwhelm the user.
+- Your reply must be natural conversational English — never output a field name, JSON key, or code word as your reply.
 - If all fields are complete, congratulate the user and invite them to review or download the document.
 - MANDATORY: If there are any unfilled fields, the very last sentence of your reply MUST be a question asking for the next missing piece of information. Your reply cannot end without a question mark (?) when fields remain unfilled."""
 
@@ -213,10 +223,27 @@ async def chat(req: ChatRequest):
         print(f"[chat] LLM error: {exc!r}")
         return {"reply": "I had trouble processing that. Please try again.", "document_name": None, "fields": {}}
 
+    # Guard against the model echoing a schema key as the reply (e.g. "field_updates", "slots").
+    # If the reply looks wrong, generate a sensible fallback from the remaining fields list.
+    _bad_reply_tokens = {"slots", "field_updates", "document_name", "reply", "key", "value",
+                         "null", "true", "false", "none", "extracted", "values"}
+    reply = extraction.reply.strip()
+    if not reply or reply.lower() in _bad_reply_tokens or len(reply) < 8:
+        print(f"[chat] bad reply detected: {reply!r}")
+        if req.document_name and template_fields:
+            next_field = next((f for f in template_fields if not req.fields.get(f, "").strip()), None)
+            reply = (
+                f"Got it! Could you tell me the {next_field} for this agreement?"
+                if next_field
+                else "All fields are complete! You can review and download the document."
+            )
+        else:
+            reply = "What type of legal document do you need help with today?"
+
     return {
-        "reply": extraction.reply,
+        "reply": reply,
         "document_name": extraction.document_name,
-        "fields": {u.key: u.value for u in extraction.field_updates},
+        "fields": {u.key: u.value for u in extraction.slots},
     }
 
 

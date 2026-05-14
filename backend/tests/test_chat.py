@@ -58,11 +58,11 @@ def test_filling_prompt_includes_unfilled():
 
 # ── helper: build fake litellm response ──────────────────────────────────────
 
-def _mock_llm(reply: str, document_name=None, field_updates=None):
+def _mock_llm(reply: str, document_name=None, slots=None):
     payload = {
         "reply": reply,
         "document_name": document_name,
-        "field_updates": field_updates or [],
+        "slots": slots or [],
     }
     msg = MagicMock()
     msg.content = json.dumps(payload)
@@ -107,7 +107,7 @@ def test_chat_selects_document(mock_completion):
 def test_chat_extracts_fields(mock_completion):
     mock_completion.return_value = _mock_llm(
         "Got it! What state governs this agreement?",
-        field_updates=[
+        slots=[
             {"key": "Provider", "value": "Acme Corp"},
             {"key": "Customer", "value": "Widget Ltd"},
         ],
