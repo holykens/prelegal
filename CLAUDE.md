@@ -8,7 +8,7 @@ The available documents are covered in the catalog.json file in the project root
 
 @catalog.json
 
-The current implementation supports all 12 legal document types via AI chat. Real authentication and document persistence are not yet implemented.
+The current implementation supports all 12 legal document types via AI chat. Real authentication, document persistence, and history restore are implemented (PL-7).
 
 ## Development process
 
@@ -29,7 +29,7 @@ There is an OPENROUTER_API_KEY in the .env file in the project root.
 The entire project should be packaged into a Docker container.  
 The backend should be in backend/ and be a uv project, using FastAPI.  
 The frontend should be in frontend/  
-The database should use SQLLite and be created from scratch each time the Docker container is brought up, allowing for a users table with sign up and sign in.  
+The database uses SQLite stored at `./data/prelegal.db` on the host (mounted into the container via Docker volume). The schema is created with `CREATE TABLE IF NOT EXISTS` on startup so data persists across container restarts.  
 Consider statically building the frontend and serving it via FastAPI, if that will work.  
 There should be scripts in scripts/ for:  
 ```bash
@@ -87,12 +87,30 @@ Backend available at http://localhost:8000
 - Fields the user marks empty ("leave blank") are set to `"None"` and never re-asked
 - 24 unit tests in `backend/tests/test_chat.py`
 
+### Completed (PL-7) — merged to main
+- **Real authentication**: `POST /api/auth/register` and `POST /api/auth/login` with bcrypt password hashing; HS256 JWT returned and stored in `localStorage` as `pl_session`
+- **Sign In / Sign Up toggle** on the login page with inline error display and loading state; separate Pydantic models (`RegisterRequest` with `min_length=8`, `LoginRequest` without) prevent 422 crashes on short login passwords
+- **Document persistence**: `documents` table (`id, user_id, document_name, fields_json, messages_json, created_at, updated_at`); auto-saved after every chat turn that changes fields
+- **Document history page** (`/history`): lists all user documents with field count, message count, and last-updated timestamp; each user's documents are isolated from other users
+- **History restore**: clicking a document in `/history` sets `pl_restore_doc_id` in `sessionStorage`; on main page mount the document is fetched by ID, the template is re-fetched for content/field list, and `docState` + `messages` + `documentId` are fully restored
+- **New Document button** in the main page header: resets all state and restarts the AI greeting flow
+- **Legal disclaimer banner**: amber warning strip above the document preview — "Draft only — subject to legal review"
+- **Persistent SQLite storage**: DB stored in `./data/prelegal.db` on the host via Docker volume mount; `init_db()` uses `CREATE TABLE IF NOT EXISTS` so data survives restarts
+- **UI polish**: user email shown in header, History navigation link, updated page title
+- **49 backend tests**: 24 chat tests (unchanged), 13 auth tests (`backend/tests/test_auth.py`), 12 document tests (`backend/tests/test_documents.py`); `conftest.py` `fresh_db` fixture drops/recreates tables before each test
+
 ### Current API Endpoints
 - `GET /api/health` — health check
 - `GET /api/catalog` — full document catalog
 - `GET /api/template?document_name=...` — template markdown + field names
 - `POST /api/chat` — AI chat turn; accepts `{messages, document_name, fields}`, returns `{reply, document_name, fields}`
+- `POST /api/auth/register` — create account; returns `{token, email}`
+- `POST /api/auth/login` — sign in; returns `{token, email}`
+- `GET /api/documents` — list user's saved documents (auth required)
+- `POST /api/documents` — create a document session (auth required); returns `{id, ...}`
+- `PUT /api/documents/{id}` — update fields + messages for a session (auth required)
+- `GET /api/documents/{id}` — fetch a full document session (auth required)
 
 ### Not yet implemented
-- Real authentication and document persistence (PL-7)
+- Nothing currently planned
 
