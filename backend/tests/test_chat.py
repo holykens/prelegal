@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app, extract_fields, _selection_prompt, _filling_prompt
+from main import app, extract_fields, _selection_prompt, _filling_prompt, _propagate_variants
 
 client = TestClient(app)
 
@@ -140,6 +140,68 @@ def test_chat_safety_net4_extracts_ack_from_reply(mock_completion):
     assert "Payment Process" in data["fields"], (
         f"S4 should have extracted Payment Process from reply, got fields: {data['fields']}"
     )
+
+
+# ── _propagate_variants (direct unit test) ──────────────────────────────────
+
+def test_propagate_variants_sets_singular_from_plural():
+    """Setting a plural field must also set its singular variant if it's in template_fields."""
+    template_fields = ["Provider Covered Claims", "Provider Covered Claim", "Customer"]
+    new_fields = {"Provider Covered Claims": "None"}
+    result = _propagate_variants(new_fields, template_fields, existing_fields={})
+    assert result["Provider Covered Claim"] == "None", (
+        f"singular variant not propagated, got: {result}"
+    )
+
+
+def test_propagate_variants_sets_plural_from_singular():
+    """Setting a singular field must also set its plural variant if it's in template_fields."""
+    template_fields = ["Subscription Period", "Subscription Periods"]
+    new_fields = {"Subscription Period": "1 year"}
+    result = _propagate_variants(new_fields, template_fields, existing_fields={})
+    assert result["Subscription Periods"] == "1 year"
+
+
+def test_propagate_variants_does_not_overwrite_existing():
+    """If a variant is already in existing_fields, propagation must NOT clobber it."""
+    template_fields = ["Customer", "Customer's"]
+    new_fields = {"Customer": "Ken"}
+    result = _propagate_variants(new_fields, template_fields, existing_fields={"Customer's": "OtherValue"})
+    # Customer's already in existing_fields, so it must not appear in the propagated result
+    assert "Customer's" not in result
+
+
+# ── Integration: S4 extraction followed by variant propagation ───────────────
+
+@patch("main.load_template")
+@patch("main.completion")
+def test_chat_s4_extraction_propagates_variants(mock_completion, mock_load_template):
+    """REGRESSION: S4 extracts a plural field from reply → singular variant must also be filled.
+
+    This locks in the bug where 'Provider Covered Claims' was extracted by S4 but
+    'Provider Covered Claim' (singular variant in the template) stayed unfilled,
+    causing the bot to re-ask about it on a later turn.
+    """
+    mock_load_template.return_value = (
+        'Some clause about <span class="orderform_link">Provider Covered Claims</span> '
+        'and <span class="orderform_link">Provider Covered Claim</span> liability.'
+    )
+    mock_completion.return_value = _mock_llm(
+        "Got it, I've set Provider Covered Claims to None.",
+        slots=[],  # model said it in words but forgot the structured output
+    )
+    res = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "Let's put this empty for now"}],
+        "document_name": "Cloud Service Agreement",
+        "fields": {},
+    })
+    assert res.status_code == 200
+    fields = res.json()["fields"]
+    assert "Provider Covered Claims" in fields, f"S4 should extract plural, got: {fields}"
+    assert "Provider Covered Claim" in fields, (
+        f"singular variant must be auto-propagated after S4, got: {fields}"
+    )
+    assert fields["Provider Covered Claim"] == "None"
 
 
 @patch("main.completion")

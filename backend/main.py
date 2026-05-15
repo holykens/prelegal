@@ -286,11 +286,6 @@ async def chat(req: ChatRequest):
                     if field.lower() in last_msg:
                         new_fields[field] = "None"
 
-    # Safety net 2: auto-propagate plural, singular, and possessive variants.
-    # e.g. setting "Subscription Period" also sets "Subscription Periods"; "Customer" → "Customer's"
-    if req.document_name and template_fields:
-        new_fields = _propagate_variants(new_fields, template_fields, req.fields)
-
     # Safety net 3: if the model mentions an ISO date (YYYY-MM-DD) in its reply, update any
     # corresponding field that currently holds a relative/non-ISO date value (e.g. "tomorrow").
     if req.document_name and template_fields:
@@ -344,6 +339,13 @@ async def chat(req: ChatRequest):
                 new_fields[field] = val
                 print(f"[chat] S4 ack: {field!r} → {val[:60]!r}")
                 break  # one field per pass to avoid false matches
+
+    # Final step: propagate plural, singular, and possessive variants for everything
+    # collected so far. MUST run AFTER all field-adding safety nets (1, 3, 4) so that
+    # fields added by S3/S4 also get their variants propagated.
+    # e.g. S4 extracts "Provider Covered Claims" → propagate also sets "Provider Covered Claim"
+    if req.document_name and template_fields:
+        new_fields = _propagate_variants(new_fields, template_fields, req.fields)
 
     # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
     # A field is "handled" once it has any key in the combined fields dict (even value "None").
