@@ -65,6 +65,18 @@ def test_login_wrong_password_returns_401():
     assert res.status_code == 401
 
 
+def test_login_short_password_returns_401_not_422():
+    """Regression: login with a short password must return 401, not a 422 validation error.
+    Previously LoginRequest shared min_length=8 with RegisterRequest, which caused FastAPI
+    to return a 422 Pydantic error before checking credentials, crashing the React frontend."""
+    _register(email="short@example.com")
+    res = client.post("/api/auth/login", json={"email": "short@example.com", "password": "abc"})
+    assert res.status_code == 401, (
+        f"Expected 401, got {res.status_code}. "
+        "A 422 here means the login model still has min_length validation."
+    )
+
+
 def test_login_unknown_email_returns_401():
     res = _login(email="nobody@example.com")
     assert res.status_code == 401
