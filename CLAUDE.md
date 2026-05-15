@@ -8,7 +8,7 @@ The available documents are covered in the catalog.json file in the project root
 
 @catalog.json
 
-The current implementation supports Mutual NDA drafting via AI chat. Multi-document support, real authentication, and document persistence are not yet implemented.
+The current implementation supports all 12 legal document types via AI chat. Real authentication and document persistence are not yet implemented.
 
 ## Development process
 
@@ -71,16 +71,21 @@ Backend available at http://localhost:8000
 
 ### Completed (PL-6) — merged to main
 - All 12 legal document types supported via the same AI chat flow
-- Two-phase chat: document selection phase (AI helps user pick from catalog), then field-filling phase
+- Two-phase chat: document selection (AI matches user request to catalog, handles unsupported doc types gracefully), then field-filling
 - Generic template rendering: extracts `coverpage_link`, `keyterms_link`, `orderform_link` span values as fillable fields; highlights collected values in the live preview
 - `GET /api/catalog` — returns full document catalog
 - `GET /api/template?document_name=...` — returns template content + extracted field names
 - `DocumentState` frontend model (replaces NDA-specific `NDAFormData`)
 - `DocumentPreview` and `FieldsForm` replace the NDA-specific preview and form
 - `catalog.json` and `templates/` now copied into Docker image
-- Focus returned to chat input after each AI response
-- AI system prompt always requires a follow-up question
-- 15 unit tests in `backend/tests/test_chat.py`
+- Chat auto-initialises on load — AI greets the user without requiring a first message
+- After document selection the AI immediately asks the first field question (no blank-message gap)
+- Focus returns to chat input after each AI response; textarea auto-grows as user types
+- Backend enforces follow-up questions in code (not just via prompt) — model cannot skip asking
+- Four layered safety nets handle cases where the model acknowledges a field in reply text but omits it from structured output: skip detection, date correction, acknowledgment extraction, variant propagation
+- Plural/singular/possessive field variants are auto-propagated (e.g. setting "Subscription Period" also sets "Subscription Periods"; "Customer" → "Customer's")
+- Fields the user marks empty ("leave blank") are set to `"None"` and never re-asked
+- 24 unit tests in `backend/tests/test_chat.py`
 
 ### Current API Endpoints
 - `GET /api/health` — health check
