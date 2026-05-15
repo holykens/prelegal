@@ -174,6 +174,14 @@ export default function Home() {
     router.push("/login");
   }
 
+  function handleNewDocument() {
+    setDocState(defaultDocumentState);
+    setMessages([]);
+    setDocumentId(null);
+    setSidebarTab("chat");
+    callChat([], null, {});
+  }
+
   const docTitle = docState.documentName ?? "Legal Document Assistant";
 
   return (
@@ -197,6 +205,17 @@ export default function Home() {
               {session.email}
             </span>
           )}
+          <button
+            onClick={handleNewDocument}
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            style={{ backgroundColor: "#753991" }}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New Document
+          </button>
           <a
             href="/history"
             className="flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors"

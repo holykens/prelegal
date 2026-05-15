@@ -73,6 +73,19 @@ def test_list_documents_includes_fields():
     assert doc["fields"]["Provider"] == "Acme Corp"
 
 
+def test_list_documents_includes_messages():
+    """Regression: GET /api/documents must return messages so the history page
+    can display message count without crashing on undefined.length."""
+    headers = _auth_header()
+    client.post("/api/documents", json=_sample_doc(), headers=headers)
+    res = client.get("/api/documents", headers=headers)
+    assert res.status_code == 200
+    doc = res.json()[0]
+    assert "messages" in doc, "messages key must be present in list response"
+    assert isinstance(doc["messages"], list)
+    assert len(doc["messages"]) == 2
+
+
 # ── get document ──────────────────────────────────────────────────────────────
 
 def test_get_document_returns_full_record():

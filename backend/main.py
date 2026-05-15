@@ -241,7 +241,7 @@ class DocumentRecord(BaseModel):
 async def list_documents(user: dict = Depends(get_current_user)):
     with _db() as conn:
         rows = conn.execute(
-            "SELECT id, document_name, fields_json, created_at, updated_at "
+            "SELECT id, document_name, fields_json, messages_json, created_at, updated_at "
             "FROM documents WHERE user_id = ? ORDER BY updated_at DESC",
             (user["user_id"],),
         ).fetchall()
@@ -250,6 +250,7 @@ async def list_documents(user: dict = Depends(get_current_user)):
             "id": r["id"],
             "document_name": r["document_name"],
             "fields": json.loads(r["fields_json"]),
+            "messages": json.loads(r["messages_json"]),
             "created_at": r["created_at"],
             "updated_at": r["updated_at"],
         }
