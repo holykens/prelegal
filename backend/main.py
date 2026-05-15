@@ -2,16 +2,19 @@ import os
 import re
 import json
 import sqlite3
+import datetime
 from typing import Literal, Optional
 
 _ISO_DATE_RE = re.compile(r'\b(\d{4}-\d{2}-\d{2})\b')
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from litellm import completion
 from pydantic import BaseModel, Field
+import jwt
+import bcrypt
 
 load_dotenv()
 
@@ -27,6 +30,9 @@ app.add_middleware(
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "prelegal.db"))
 MODEL = "openrouter/openai/gpt-oss-120b"
 EXTRA_BODY = {"provider": {"order": ["cerebras"]}}
+JWT_SECRET = os.getenv("JWT_SECRET", "prelegal-dev-secret-change-in-production")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_DAYS = 30
 
 _BASE_DIR = os.path.dirname(__file__)
 _catalog_path = os.getenv("CATALOG_PATH", os.path.join(_BASE_DIR, "catalog.json"))
@@ -39,7 +45,6 @@ if os.path.exists(_catalog_path):
         _catalog = json.load(_f)
     _catalog_by_name = {doc["name"]: doc for doc in _catalog}
 
-# Matches all three span types used as fillable placeholders across templates
 _FIELD_SPAN_RE = re.compile(
     r'<span class="(?:coverpage_link|keyterms_link|orderform_link)">([^<]+)</span>'
 )
@@ -49,8 +54,6 @@ def load_template(doc_name: str) -> str | None:
     doc = _catalog_by_name.get(doc_name)
     if not doc:
         return None
-    # doc["filename"] is like "templates/Mutual-NDA.md"; strip the leading "templates/" prefix
-    # since we resolve relative to TEMPLATES_DIR
     filename = os.path.basename(doc["filename"])
     path = os.path.join(TEMPLATES_DIR, filename)
     if not os.path.exists(path):
@@ -70,17 +73,12 @@ def extract_fields(content: str) -> list[str]:
 
 
 def _related_names(field: str) -> list[str]:
-    """Return plural, singular, and possessive variants of a field name."""
     variants = []
-    # Plural: field + "s"
     variants.append(field + "s")
-    # Singular: strip trailing "s"
     if field.endswith("s") and len(field) > 2:
         variants.append(field[:-1])
-    # Possessive: field + "'s"
     variants.append(field + "’s")  # curly apostrophe
     variants.append(field + "'s")       # straight apostrophe
-    # Base of possessive
     for suffix in ("’s", "'s"):
         if field.endswith(suffix):
             variants.append(field[: -len(suffix)])
@@ -89,7 +87,6 @@ def _related_names(field: str) -> list[str]:
 
 def _propagate_variants(new_fields: dict[str, str], template_fields: list[str],
                         existing_fields: dict[str, str]) -> dict[str, str]:
-    """When a field is set, also set its plural/singular/possessive variants."""
     result = dict(new_fields)
     for key, value in list(new_fields.items()):
         for variant in _related_names(key):
@@ -98,16 +95,33 @@ def _propagate_variants(new_fields: dict[str, str], template_fields: list[str],
     return result
 
 
-def init_db():
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
+# ── DB helpers ────────────────────────────────────────────────────────────────
+
+def _db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE users (
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True) if os.path.dirname(DB_PATH) else None
+    conn = sqlite3.connect(DB_PATH)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
+        );
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            document_name TEXT NOT NULL,
+            fields_json TEXT NOT NULL DEFAULT '{}',
+            messages_json TEXT NOT NULL DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
     conn.close()
@@ -117,6 +131,183 @@ def init_db():
 async def startup():
     init_db()
 
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def _hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+def _create_token(user_id: int, email: str) -> str:
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=JWT_EXPIRY_DAYS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _decode_token(token: str) -> dict:
+    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+
+
+def get_current_user(authorization: str = Header(None)) -> dict:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization[len("Bearer "):]
+    try:
+        payload = _decode_token(token)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return {"user_id": int(payload["sub"]), "email": payload["email"]}
+
+
+# ── Auth models ───────────────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., max_length=128)
+
+
+class AuthResponse(BaseModel):
+    token: str
+    email: str
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/api/auth/register", response_model=AuthResponse, status_code=201)
+async def register(req: RegisterRequest):
+    pw_hash = _hash_password(req.password)
+    try:
+        with _db() as conn:
+            cur = conn.execute(
+                "INSERT INTO users (email, password_hash) VALUES (?, ?) RETURNING id",
+                (req.email.lower().strip(), pw_hash),
+            )
+            user_id = cur.fetchone()[0]
+            conn.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Email already registered")
+    token = _create_token(user_id, req.email.lower().strip())
+    return AuthResponse(token=token, email=req.email.lower().strip())
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(req: LoginRequest):
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT id, email, password_hash FROM users WHERE email = ?",
+            (req.email.lower().strip(),),
+        ).fetchone()
+    if not row or not _verify_password(req.password, row["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = _create_token(row["id"], row["email"])
+    return AuthResponse(token=token, email=row["email"])
+
+
+# ── Document models ───────────────────────────────────────────────────────────
+
+class SaveDocumentRequest(BaseModel):
+    document_name: str = Field(..., max_length=200)
+    fields: dict[str, str] = {}
+    messages: list[dict] = []
+
+
+class DocumentRecord(BaseModel):
+    id: int
+    document_name: str
+    fields: dict[str, str]
+    messages: list[dict]
+    created_at: str
+    updated_at: str
+
+
+# ── Document endpoints ────────────────────────────────────────────────────────
+
+@app.get("/api/documents")
+async def list_documents(user: dict = Depends(get_current_user)):
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT id, document_name, fields_json, messages_json, created_at, updated_at "
+            "FROM documents WHERE user_id = ? ORDER BY updated_at DESC",
+            (user["user_id"],),
+        ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "document_name": r["document_name"],
+            "fields": json.loads(r["fields_json"]),
+            "messages": json.loads(r["messages_json"]),
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/documents", status_code=201)
+async def create_document(req: SaveDocumentRequest, user: dict = Depends(get_current_user)):
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    with _db() as conn:
+        cur = conn.execute(
+            "INSERT INTO documents (user_id, document_name, fields_json, messages_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            (user["user_id"], req.document_name, json.dumps(req.fields),
+             json.dumps(req.messages), now, now),
+        )
+        doc_id = cur.fetchone()[0]
+        conn.commit()
+    return {"id": doc_id, "document_name": req.document_name, "created_at": now, "updated_at": now}
+
+
+@app.put("/api/documents/{doc_id}")
+async def update_document(doc_id: int, req: SaveDocumentRequest, user: dict = Depends(get_current_user)):
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    with _db() as conn:
+        result = conn.execute(
+            "UPDATE documents SET fields_json = ?, messages_json = ?, updated_at = ? "
+            "WHERE id = ? AND user_id = ?",
+            (json.dumps(req.fields), json.dumps(req.messages), now, doc_id, user["user_id"]),
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Document not found")
+    return {"id": doc_id, "updated_at": now}
+
+
+@app.get("/api/documents/{doc_id}", response_model=DocumentRecord)
+async def get_document(doc_id: int, user: dict = Depends(get_current_user)):
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT id, document_name, fields_json, messages_json, created_at, updated_at "
+            "FROM documents WHERE id = ? AND user_id = ?",
+            (doc_id, user["user_id"]),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return DocumentRecord(
+        id=row["id"],
+        document_name=row["document_name"],
+        fields=json.loads(row["fields_json"]),
+        messages=json.loads(row["messages_json"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+# ── Basic endpoints ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
@@ -201,7 +392,6 @@ Rules:
 
 def _filling_prompt(document_name: str, template_fields: list[str], current_fields: dict) -> str:
     fields_list = "\n".join(f"- {f}" for f in template_fields)
-    # A field is "handled" when it has any entry in current_fields (even "None")
     handled = set(current_fields.keys())
     filled_display = {k: v for k, v in current_fields.items()}
     unfilled = [f for f in template_fields if f not in handled]
@@ -261,7 +451,6 @@ async def chat(req: ChatRequest):
         print(f"[chat] LLM error: {exc!r}")
         return {"reply": "I had trouble processing that. Please try again.", "document_name": None, "fields": {}}
 
-    # Guard against the model echoing a schema key or a template field name as the reply.
     _bad_reply_tokens = {"slots", "field_updates", "document_name", "reply", "key", "value",
                          "null", "true", "false", "none", "extracted", "values"}
     reply = extraction.reply.strip()
@@ -271,12 +460,10 @@ async def chat(req: ChatRequest):
             or reply.lower() in _field_names_lower
             or len(reply) < 8):
         print(f"[chat] bad reply detected: {reply!r}")
-        reply = ""  # will be rebuilt below
+        reply = ""
 
     new_fields = {u.key: u.value for u in extraction.slots}
 
-    # Safety net 1: detect when the user explicitly skips a field by name.
-    # e.g. "leave Use Limitations empty" → auto-set {"Use Limitations": "None"}
     if req.messages and req.document_name and template_fields:
         last_msg = req.messages[-1].content.lower()
         _skip_signals = {"empty", "blank", "none", "skip", "n/a", "leave it", "leave empty", "leave blank"}
@@ -286,8 +473,6 @@ async def chat(req: ChatRequest):
                     if field.lower() in last_msg:
                         new_fields[field] = "None"
 
-    # Safety net 3: if the model mentions an ISO date (YYYY-MM-DD) in its reply, update any
-    # corresponding field that currently holds a relative/non-ISO date value (e.g. "tomorrow").
     if req.document_name and template_fields:
         reply_lower_for_dates = reply.lower()
         for field in template_fields:
@@ -302,11 +487,6 @@ async def chat(req: ChatRequest):
                         new_fields[field] = date_match.group()
                         print(f"[chat] S3 date: {field} → {date_match.group()}")
 
-    # Safety net 4: if the model acknowledges setting a field value in its reply text but
-    # forgot to put it in slots, extract the value from the acknowledgment.
-    # Handles two patterns:
-    #   field-first:  "Payment Process has been set to: ..."
-    #   verb-first:   "I've noted the Technical Support as: ..."
     _S4_VERBS = (r"has been set|have been set|is set|are set|set|recorded|"
                  r"captured|noted|added|updated|is now")
     _S4_VERB_RE = re.compile(rf"\b(?:{_S4_VERBS})\b", re.I)
@@ -320,9 +500,6 @@ async def chat(req: ChatRequest):
             idx = reply_lower_s4.find(field_lower)
             if not (0 <= idx <= 100):
                 continue
-            # Look for an ack verb in a window around the field name. Covers both:
-            #   "<Field> has been set to ..."  (verb after field)
-            #   "I've noted the <Field> as ..." (verb before field)
             window = reply[max(0, idx - 40): idx + len(field) + 40]
             if not _S4_VERB_RE.search(window):
                 continue
@@ -333,22 +510,15 @@ async def chat(req: ChatRequest):
             raw = m.group(1).strip()
             sentence_end = re.search(r"[.?!]", raw)
             val = (raw[: sentence_end.start()].strip() if sentence_end else raw).rstrip(".,!?")
-            # Strip surrounding quotes (straight or curly)
             val = val.strip("'\"" + "‘’“”")
             if 3 <= len(val) <= 500:
                 new_fields[field] = val
                 print(f"[chat] S4 ack: {field!r} → {val[:60]!r}")
-                break  # one field per pass to avoid false matches
+                break
 
-    # Final step: propagate plural, singular, and possessive variants for everything
-    # collected so far. MUST run AFTER all field-adding safety nets (1, 3, 4) so that
-    # fields added by S3/S4 also get their variants propagated.
-    # e.g. S4 extracts "Provider Covered Claims" → propagate also sets "Provider Covered Claim"
     if req.document_name and template_fields:
         new_fields = _propagate_variants(new_fields, template_fields, req.fields)
 
-    # Enforce follow-up question in code — never rely solely on the model obeying the prompt.
-    # A field is "handled" once it has any key in the combined fields dict (even value "None").
     if req.document_name and template_fields:
         already_filled = {**req.fields, **new_fields}
         still_unfilled = [f for f in template_fields if f not in already_filled]
