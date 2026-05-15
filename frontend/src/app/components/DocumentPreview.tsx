@@ -71,6 +71,19 @@ export default function DocumentPreview({ docState }: Props) {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Legal disclaimer banner */}
+      <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg border print:hidden"
+        style={{ backgroundColor: "#fffbeb", borderColor: "#fde68a" }}>
+        <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          style={{ color: "#d97706" }}>
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+        <p className="text-xs" style={{ color: "#92400e" }}>
+          <span className="font-semibold">Draft only.</span> This document is AI-generated and should be considered a starting point. It is subject to legal review before use.
+        </p>
+      </div>
+
       <div className="flex items-center justify-between mb-4 print:hidden">
         <p className="text-sm text-gray-500">
           Values you enter are{" "}
