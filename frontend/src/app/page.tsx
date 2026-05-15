@@ -151,6 +151,41 @@ export default function Home() {
     }
   }
 
+  async function restoreDocument(s: Session, docId: number) {
+    setIsLoading(true);
+    let restored = false;
+    try {
+      const docRes = await fetch(`${API_BASE}/api/documents/${docId}`, {
+        headers: authHeaders(s),
+      });
+      if (docRes.ok) {
+        const doc = await docRes.json();
+        const tmplRes = await fetch(
+          `${API_BASE}/api/template?document_name=${encodeURIComponent(doc.document_name)}`
+        );
+        if (tmplRes.ok) {
+          const tmpl = await tmplRes.json();
+          setDocState({
+            documentName: doc.document_name,
+            templateContent: tmpl.content,
+            allFields: tmpl.fields,
+            fields: doc.fields,
+          });
+          setMessages(doc.messages ?? []);
+          setDocumentId(docId);
+          restored = true;
+        }
+      }
+    } catch {
+      // fall through to fresh start
+    } finally {
+      setIsLoading(false);
+    }
+    if (!restored) {
+      callChat([], null, {});
+    }
+  }
+
   useEffect(() => {
     const s = getSession();
     if (!s) {
@@ -158,7 +193,13 @@ export default function Home() {
       return;
     }
     setSessionState(s);
-    callChat([], null, {});
+    const restoreId = sessionStorage.getItem("pl_restore_doc_id");
+    if (restoreId) {
+      sessionStorage.removeItem("pl_restore_doc_id");
+      restoreDocument(s, parseInt(restoreId, 10));
+    } else {
+      callChat([], null, {});
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

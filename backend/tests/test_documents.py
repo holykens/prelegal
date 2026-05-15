@@ -135,6 +135,64 @@ def test_update_document_persists_new_fields():
     assert fetched["fields"]["Customer"] == "New Customer Inc"
 
 
+def test_document_restore_preserves_all_data():
+    """Regression: the data a user fills in must survive a create→update→fetch cycle
+    so that clicking a history item fully restores the document.
+
+    Previously GET /api/documents/{id} returned the correct record but
+    GET /api/documents (list) omitted messages, causing the history page to crash
+    before the user could even click restore."""
+    headers = _auth_header()
+
+    # Simulate: user starts a document (create)
+    initial = {
+        "document_name": "Pilot Agreement",
+        "fields": {"Provider": "Acme Corp"},
+        "messages": [
+            {"role": "user", "content": "I need a pilot agreement"},
+            {"role": "assistant", "content": "Sure! Who is the Provider?"},
+            {"role": "user", "content": "Acme Corp"},
+        ],
+    }
+    doc_id = client.post("/api/documents", json=initial, headers=headers).json()["id"]
+
+    # Simulate: user fills more fields (update)
+    updated = {
+        "document_name": "Pilot Agreement",
+        "fields": {"Provider": "Acme Corp", "Customer": "Widget Ltd", "Pilot Period": "30 days"},
+        "messages": initial["messages"] + [
+            {"role": "assistant", "content": "Got it! What is the Customer name?"},
+            {"role": "user", "content": "Widget Ltd"},
+            {"role": "assistant", "content": "And the Pilot Period?"},
+            {"role": "user", "content": "30 days"},
+        ],
+    }
+    client.put(f"/api/documents/{doc_id}", json=updated, headers=headers)
+
+    # Restore: fetch the document by ID (what the frontend does when clicking history)
+    res = client.get(f"/api/documents/{doc_id}", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+
+    # All fields must be present
+    assert data["fields"]["Provider"] == "Acme Corp"
+    assert data["fields"]["Customer"] == "Widget Ltd"
+    assert data["fields"]["Pilot Period"] == "30 days"
+
+    # Full message history must be preserved
+    assert len(data["messages"]) == 7
+    assert data["messages"][0]["role"] == "user"
+    assert data["messages"][-1]["content"] == "30 days"
+
+    # The document must also appear correctly in the list view
+    list_res = client.get("/api/documents", headers=headers)
+    assert list_res.status_code == 200
+    list_doc = next(d for d in list_res.json() if d["id"] == doc_id)
+    assert "messages" in list_doc, "messages must be present in list response for history page"
+    assert len(list_doc["messages"]) == 7
+    assert list_doc["fields"]["Customer"] == "Widget Ltd"
+
+
 def test_update_document_404_for_wrong_user():
     client.post("/api/auth/register", json={"email": "owner@example.com", "password": "password123"})
     token_owner = client.post("/api/auth/login", json={"email": "owner@example.com", "password": "password123"}).json()["token"]
