@@ -40,7 +40,12 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.detail ?? "Something went wrong. Please try again.");
+        const detail = data.detail;
+        if (Array.isArray(detail)) {
+          setError(detail[0]?.msg ?? "Validation error. Please check your input.");
+        } else {
+          setError(typeof detail === "string" ? detail : "Something went wrong. Please try again.");
+        }
         return;
       }
       setSession({ token: data.token, email: data.email });

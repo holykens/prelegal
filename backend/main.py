@@ -171,9 +171,14 @@ def get_current_user(authorization: str = Header(None)) -> dict:
 
 # ── Auth models ───────────────────────────────────────────────────────────────
 
-class AuthRequest(BaseModel):
+class RegisterRequest(BaseModel):
     email: str = Field(..., max_length=254)
     password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., max_length=128)
 
 
 class AuthResponse(BaseModel):
@@ -184,7 +189,7 @@ class AuthResponse(BaseModel):
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 @app.post("/api/auth/register", response_model=AuthResponse, status_code=201)
-async def register(req: AuthRequest):
+async def register(req: RegisterRequest):
     pw_hash = _hash_password(req.password)
     try:
         with _db() as conn:
@@ -201,7 +206,7 @@ async def register(req: AuthRequest):
 
 
 @app.post("/api/auth/login", response_model=AuthResponse)
-async def login(req: AuthRequest):
+async def login(req: LoginRequest):
     with _db() as conn:
         row = conn.execute(
             "SELECT id, email, password_hash FROM users WHERE email = ?",
